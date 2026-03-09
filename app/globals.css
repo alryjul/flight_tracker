@@ -330,14 +330,13 @@ select {
 }
 
 .flight-list-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  border: 1px solid transparent;
-  border-radius: 18px;
-  background: var(--panel);
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px 15px;
+  border: 1px solid rgba(18, 39, 60, 0.08);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(254, 254, 253, 0.94), rgba(241, 245, 248, 0.88));
   color: inherit;
   text-align: left;
   cursor: pointer;
@@ -350,21 +349,95 @@ select {
 .flight-list-item:hover,
 .flight-list-item.active {
   transform: translateY(-1px);
-  border-color: rgba(15, 76, 129, 0.18);
-  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(15, 76, 129, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 243, 248, 0.94));
 }
 
-.flight-list-item span {
+.flight-list-item.active {
+  box-shadow: inset 3px 0 0 #0f4c81;
+}
+
+.atc-strip,
+.strip-identifier,
+.strip-field strong {
+  font-family: "SFMono-Regular", "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.strip-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.strip-identifier {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.strip-category {
+  padding: 5px 8px 4px;
+  border: 1px solid rgba(18, 39, 60, 0.12);
+  border-radius: 8px;
+  background: rgba(246, 248, 250, 0.92);
+  color: var(--text);
+  font-family: "SFMono-Regular", "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.equipment-tag.family-airliner {
+  background: rgba(15, 76, 129, 0.08);
+  color: #0f4c81;
+}
+
+.equipment-tag.family-regional,
+.equipment-tag.family-business-jet {
+  background: rgba(76, 99, 120, 0.1);
+  color: #30485d;
+}
+
+.equipment-tag.family-general-aviation {
+  background: rgba(160, 126, 74, 0.12);
+  color: #7d5a21;
+}
+
+.equipment-tag.family-helicopter {
+  background: rgba(202, 117, 55, 0.12);
+  color: #9f4316;
+}
+
+.equipment-tag.family-unknown {
+  background: rgba(18, 39, 60, 0.06);
+  color: #4e6477;
+}
+
+.strip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.strip-field {
   display: grid;
   gap: 4px;
 }
 
-.flight-list-item strong {
-  font-size: 0.92rem;
+.strip-field small {
+  margin: 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
-.flight-list-item span:last-child {
-  justify-items: end;
+.strip-field strong {
+  font-size: 0.82rem;
+  line-height: 1.25;
+  font-weight: 500;
 }
 
 .maplibregl-ctrl-top-right,
@@ -443,5 +516,9 @@ select {
 
   .span-2 {
     grid-column: auto;
+  }
+
+  .strip-grid {
+    grid-template-columns: 1fr;
   }
 }

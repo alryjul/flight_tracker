@@ -156,8 +156,40 @@ function getListSecondaryLeft(flight: Flight) {
   return getOperatorLabel(flight) ?? flight.callsign;
 }
 
-function getListSecondaryRight(flight: Flight) {
-  return getRouteLabel(flight) ?? flight.aircraftType ?? formatAltitude(flight.altitudeFeet);
+function getAircraftTypeFamily(flight: Flight) {
+  const type = flight.aircraftType?.toUpperCase() ?? "";
+
+  if (type.startsWith("H")) {
+    return "helicopter";
+  }
+
+  if (type.startsWith("C") || type.startsWith("PA") || type.startsWith("BE")) {
+    return "general-aviation";
+  }
+
+  if (
+    type.startsWith("E13") ||
+    type.startsWith("E14") ||
+    type.startsWith("CRJ") ||
+    type.startsWith("AT7")
+  ) {
+    return "regional";
+  }
+
+  if (
+    type.startsWith("GLF") ||
+    type.startsWith("C25") ||
+    type.startsWith("LJ") ||
+    type.startsWith("CL")
+  ) {
+    return "business-jet";
+  }
+
+  if (type.startsWith("A") || type.startsWith("B7") || type.startsWith("B3") || type.startsWith("MD")) {
+    return "airliner";
+  }
+
+  return "unknown";
 }
 
 function formatAltitude(altitudeFeet: number | null) {
@@ -851,24 +883,31 @@ export function FlightMap() {
         <div className="flight-list">
           {flights.map((flight) => (
             <button
-              className={`flight-list-item ${
+              className={`flight-list-item atc-strip ${
                 flight.id === selectedFlight?.id ? "active" : ""
               }`}
               key={flight.id}
               onClick={() => setSelectedFlightId(flight.id)}
               type="button"
             >
-              <span>
-                <strong>{getPrimaryIdentifier(flight)}</strong>
-                <small>
-                  {getListSecondaryLeft(flight)} ·{" "}
-                  {formatDistanceMiles(getDistanceFromHomeBaseMiles(flight))}
-                </small>
-              </span>
-              <span>
-                <strong>{flight.aircraftType ?? "Aircraft"}</strong>
-                <small>{getListSecondaryRight(flight)}</small>
-              </span>
+              <div className="strip-topline">
+                <strong className="strip-identifier">{getPrimaryIdentifier(flight)}</strong>
+                <span
+                  className={`strip-category equipment-tag family-${getAircraftTypeFamily(flight)}`}
+                >
+                  {flight.aircraftType ?? "UNK"}
+                </span>
+              </div>
+              <div className="strip-grid">
+                <span className="strip-field">
+                  <small>Operator</small>
+                  <strong>{getListSecondaryLeft(flight)}</strong>
+                </span>
+                <span className="strip-field">
+                  <small>Route</small>
+                  <strong>{getRouteLabel(flight) ?? "Local / unknown"}</strong>
+                </span>
+              </div>
             </button>
           ))}
         </div>
