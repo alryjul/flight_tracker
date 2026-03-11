@@ -8,17 +8,29 @@ Ambient-style live flight tracker centered around West Hollywood, intended to sh
 - TypeScript
 - MapLibre GL
 - OpenSky Network API for live positions
-- ADSBdb for aircraft and route enrichment
-- AeroAPI for selected-flight detail and track overlays
+- ADSBdb for background aircraft enrichment in the live feed
+- AeroAPI for cached commercial route metadata, selected-flight metadata, and track overlays
+
+## Discovery Provider
+
+The main nearby-aircraft feed is controlled by `FLIGHT_DISCOVERY_PROVIDER`:
+
+- `auto`: behave like `opensky` for now
+- `aeroapi`: force FlightAware AeroAPI for nearby-aircraft discovery
+- `opensky`: force OpenSky for nearby-aircraft discovery
+
+The normal path is now OpenSky for nearby-aircraft discovery, with AeroAPI reserved for selected-flight enrichment and tracks. The AeroAPI discovery prototype remains available behind `FLIGHT_DISCOVERY_PROVIDER="aeroapi"` if you want to test it again later.
 
 ## Current behavior
 
 - Centers the experience around an approximate West Hollywood location
 - Shows a 25 mile airspace window
-- Polls `/api/flights` every 8 seconds
+- Polls `/api/flights` every 4 seconds
 - Uses mock flight data when OpenSky credentials are not configured
-- Enriches live flights with cached ADSBdb lookups for registration, aircraft type, airline, and route when available
-- Loads richer metadata and trajectory data for the selected aircraft from AeroAPI when `AEROAPI_KEY` is configured
+- Uses cached ADSBdb metadata for nearby aircraft details like registration, owner, and type
+- Uses AeroAPI as the primary source of truth for commercial airline/route metadata, with server-side caching and a paced top-10 background warm queue
+- Reserves AeroAPI selected-flight lookups for richer active-card metadata and track overlays
+- Loads richer selected-flight metadata and trajectory data from AeroAPI when `AEROAPI_KEY` is configured
 - Renders a live map plus a compact list of aircraft details
 
 ## Setup
@@ -32,6 +44,7 @@ Ambient-style live flight tracker centered around West Hollywood, intended to sh
 Example `.env.local`:
 
 ```bash
+FLIGHT_DISCOVERY_PROVIDER="opensky"
 OPENSKY_CLIENT_ID="your_client_id"
 OPENSKY_CLIENT_SECRET="your_client_secret"
 AEROAPI_KEY="your_aeroapi_key"
@@ -44,4 +57,4 @@ If OpenSky credentials are missing, the app still works with animated mock fligh
 ## Notes
 
 - OpenSky state vectors are enough for position and altitude, but richer metadata like aircraft type, origin, and destination may be partial or unavailable in v1.
-- ADSBdb lookups are cached in memory by aircraft hex and callsign to avoid repeated lookups every poll cycle.
+- ADSBdb lookups are cached in memory for aircraft details, and AeroAPI is cached separately for feed route metadata and selected-flight detail/track requests.

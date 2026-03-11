@@ -6,10 +6,10 @@ export default function HomePage() {
       <section className="hero-panel">
         <div className="hero-mark">
           <p className="eyebrow">Ambient Airspace</p>
-          <h1>West Hollywood Flight Tracker</h1>
+          <h1>Live Flight Tracker</h1>
         </div>
         <p className="hero-copy">
-          Live overhead traffic with airline and aircraft metadata.
+          Live overhead traffic with airline and aircraft metadata for your chosen area.
         </p>
       </section>
       <FlightMap />

@@ -3,6 +3,7 @@ export type Flight = {
   latitude: number;
   longitude: number;
   callsign: string;
+  onGround: boolean | null;
   flightNumber: string | null;
   airline: string | null;
   aircraftType: string | null;
@@ -11,6 +12,8 @@ export type Flight = {
   altitudeFeet: number | null;
   groundspeedKnots: number | null;
   headingDegrees: number | null;
+  positionTimestampSec: number | null;
+  lastContactTimestampSec: number | null;
   registration: string | null;
   registeredOwner: string | null;
 };

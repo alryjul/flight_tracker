@@ -118,6 +118,111 @@ select {
   height: 100%;
 }
 
+.area-flyout {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 3;
+  display: grid;
+  gap: 10px;
+  width: min(320px, calc(100% - 36px));
+}
+
+.area-flyout-toggle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: fit-content;
+  min-width: 126px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 12px 28px rgba(15, 35, 56, 0.1);
+  color: var(--text);
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+}
+
+.area-flyout-toggle strong {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.area-flyout-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(252, 249, 244, 0.92);
+  box-shadow: 0 16px 36px rgba(15, 35, 56, 0.12);
+  backdrop-filter: blur(18px);
+}
+
+.area-flyout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.area-field {
+  display: grid;
+  gap: 6px;
+}
+
+.area-field span {
+  font-size: 0.63rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.area-field input {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid rgba(18, 39, 60, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  font-family: "SFMono-Regular", "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.86rem;
+}
+
+.area-field input:focus {
+  outline: 2px solid rgba(15, 76, 129, 0.16);
+  outline-offset: 0;
+  border-color: rgba(15, 76, 129, 0.34);
+}
+
+.area-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.area-actions button {
+  padding: 9px 11px;
+  border: 1px solid rgba(18, 39, 60, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.area-actions .primary {
+  border-color: rgba(15, 76, 129, 0.18);
+  background: rgba(15, 76, 129, 0.11);
+  color: var(--accent);
+}
+
+.area-error {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #9f4316;
+}
+
 .map-frame {
   height: 100%;
   min-height: 0;
@@ -133,6 +238,45 @@ select {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.82);
   box-shadow: 0 12px 28px rgba(15, 35, 56, 0.1);
+}
+
+.map-hover-card {
+  position: absolute;
+  z-index: 4;
+  display: grid;
+  gap: 4px;
+  min-width: 156px;
+  padding: 10px 12px;
+  border: 1px solid rgba(18, 39, 60, 0.08);
+  border-radius: 14px;
+  background: rgba(253, 250, 245, 0.94);
+  box-shadow: 0 14px 30px rgba(15, 35, 56, 0.12);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  transform: translate(14px, -18px);
+}
+
+.map-hover-card strong {
+  font-family: "SFMono-Regular", "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.map-hover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.map-hover-row .equipment-tag {
+  flex-shrink: 0;
+}
+
+.map-hover-card span {
+  font-size: 0.8rem;
+  line-height: 1.25;
+  color: var(--muted);
 }
 
 .map-overlay strong {
@@ -315,6 +459,60 @@ select {
   font-size: 0.96rem;
 }
 
+.atc-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(19, 40, 60, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.atc-stat {
+  display: grid;
+  gap: 4px;
+  padding: 6px 8px 7px;
+  border-radius: 10px;
+  background: rgba(247, 250, 252, 0.86);
+}
+
+.atc-stat dt {
+  font-size: 0.62rem;
+}
+
+.atc-stat dd {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  line-height: 1.2;
+}
+
+.trend-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.05rem;
+  padding: 1px 4px 0;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  line-height: 1;
+  color: var(--muted);
+  background: rgba(18, 39, 60, 0.06);
+}
+
+.trend-indicator.up {
+  color: #0f4c81;
+  background: rgba(15, 76, 129, 0.1);
+}
+
+.trend-indicator.down {
+  color: #9f4316;
+  background: rgba(240, 127, 79, 0.12);
+}
+
 .span-2 {
   grid-column: 1 / -1;
 }
@@ -358,6 +556,13 @@ select {
   box-shadow: inset 3px 0 0 #0f4c81;
 }
 
+.flight-list-item.map-linked:not(.active) {
+  border-color: rgba(240, 127, 79, 0.3);
+  background:
+    linear-gradient(180deg, rgba(255, 252, 249, 0.98), rgba(248, 239, 233, 0.94));
+  box-shadow: inset 3px 0 0 rgba(240, 127, 79, 0.44);
+}
+
 .atc-strip,
 .strip-identifier,
 .strip-field strong {
@@ -376,6 +581,12 @@ select {
   line-height: 1;
 }
 
+.strip-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .strip-category {
   padding: 5px 8px 4px;
   border: 1px solid rgba(18, 39, 60, 0.12);
@@ -387,6 +598,51 @@ select {
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.12em;
+}
+
+.strip-rank-cue {
+  padding: 4px 7px 3px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  background: rgba(18, 39, 60, 0.05);
+  animation: strip-rank-cue-fade 2.2s ease forwards;
+  opacity: 0;
+}
+
+.strip-rank-cue.closer {
+  color: #0f4c81;
+  background: rgba(15, 76, 129, 0.1);
+}
+
+.strip-rank-cue.farther {
+  color: #7b5b24;
+  background: rgba(160, 126, 74, 0.12);
+}
+
+@keyframes strip-rank-cue-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  12% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  72% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
 }
 
 .equipment-tag.family-airliner {
@@ -501,6 +757,20 @@ select {
     font-size: 1.5rem;
   }
 
+  .area-flyout {
+    width: calc(100% - 24px);
+    top: 12px;
+    left: 12px;
+  }
+
+  .area-flyout-toggle {
+    width: 100%;
+  }
+
+  .area-flyout-grid {
+    grid-template-columns: 1fr;
+  }
+
   .bottom-left {
     position: static;
     margin: 12px;
@@ -511,6 +781,10 @@ select {
   }
 
   .atc-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .atc-stats {
     grid-template-columns: 1fr;
   }
 

@@ -1,8 +1,24 @@
 import { APP_CONFIG } from "@/lib/config";
-import { enrichFlightsWithAdsbdb } from "@/lib/flights/adsbdb";
-import { isWithinBoundingBox, milesToLatitudeDelta, milesToLongitudeDelta } from "@/lib/geo";
+import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
+import { enrichFlightsWithAeroApiMetadata } from "@/lib/flights/aeroapi";
+import {
+  distanceBetweenPointsMiles,
+  isWithinBoundingBox,
+  milesToLatitudeDelta,
+  milesToLongitudeDelta
+} from "@/lib/geo";
 import { getOpenSkyAuthorizationHeader } from "@/lib/flights/openskyAuth";
 import type { Flight } from "@/lib/flights/types";
+
+const DISCOVERY_FLIGHT_CANDIDATE_LIMIT = 80;
+
+export type FlightArea = {
+  center: {
+    latitude: number;
+    longitude: number;
+  };
+  radiusMiles: number;
+};
 
 type OpenSkyResponse = {
   states: Array<
@@ -28,12 +44,12 @@ type OpenSkyResponse = {
   > | null;
 };
 
-function getBounds() {
-  const { latitude, longitude } = APP_CONFIG.center;
-  const lamin = latitude - milesToLatitudeDelta(APP_CONFIG.radiusMiles);
-  const lamax = latitude + milesToLatitudeDelta(APP_CONFIG.radiusMiles);
-  const lomin = longitude - milesToLongitudeDelta(APP_CONFIG.radiusMiles, latitude);
-  const lomax = longitude + milesToLongitudeDelta(APP_CONFIG.radiusMiles, latitude);
+function getBounds(area: FlightArea) {
+  const { latitude, longitude } = area.center;
+  const lamin = latitude - milesToLatitudeDelta(area.radiusMiles);
+  const lamax = latitude + milesToLatitudeDelta(area.radiusMiles);
+  const lomin = longitude - milesToLongitudeDelta(area.radiusMiles, latitude);
+  const lomax = longitude + milesToLongitudeDelta(area.radiusMiles, latitude);
 
   return { lamin, lamax, lomin, lomax };
 }
@@ -42,8 +58,46 @@ function normalizeCallsign(callsign: string | null) {
   return callsign?.trim() || "Unknown";
 }
 
-export async function fetchOpenSkyFlights(): Promise<Flight[]> {
-  const { lamin, lamax, lomin, lomax } = getBounds();
+function hasCommercialFlightIdentity(flight: Flight) {
+  const callsign = flight.callsign.trim().toUpperCase();
+  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
+}
+
+function getDiscoveryScore(flight: Flight, area: FlightArea) {
+  let score = distanceBetweenPointsMiles({
+    fromLatitude: area.center.latitude,
+    fromLongitude: area.center.longitude,
+    toLatitude: flight.latitude,
+    toLongitude: flight.longitude
+  });
+
+  if (flight.onGround) {
+    score += hasCommercialFlightIdentity(flight) ? 6 : 16;
+  }
+
+  if (flight.altitudeFeet != null && flight.altitudeFeet < 1500 && !flight.onGround) {
+    score -= 1.5;
+  }
+
+  if (flight.groundspeedKnots != null && flight.groundspeedKnots > 180) {
+    score -= 0.5;
+  }
+
+  if (hasCommercialFlightIdentity(flight)) {
+    score -= 0.75;
+  }
+
+  return score;
+}
+
+export async function fetchOpenSkyFlights(
+  area: FlightArea = {
+    center: APP_CONFIG.center,
+    radiusMiles: APP_CONFIG.radiusMiles
+  },
+  options?: { warmAeroApiFeed?: boolean }
+): Promise<Flight[]> {
+  const { lamin, lamax, lomin, lomax } = getBounds(area);
   const authorizationHeader = await getOpenSkyAuthorizationHeader();
   const searchParams = new URLSearchParams({
     lamin: String(lamin),
@@ -72,9 +126,12 @@ export async function fetchOpenSkyFlights(): Promise<Flight[]> {
     .map((state): Flight | null => {
       const icao24 = state[0];
       const callsign = state[1];
+      const positionTimestampSec = state[3];
+      const lastContactTimestampSec = state[4];
       const longitude = state[5];
       const latitude = state[6];
       const baroAltitudeMeters = state[7];
+      const onGround = state[8];
       const velocityMetersPerSecond = state[9];
       const headingDegrees = state[10];
 
@@ -85,9 +142,9 @@ export async function fetchOpenSkyFlights(): Promise<Flight[]> {
         !isWithinBoundingBox({
           latitude,
           longitude,
-          centerLatitude: APP_CONFIG.center.latitude,
-          centerLongitude: APP_CONFIG.center.longitude,
-          radiusMiles: APP_CONFIG.radiusMiles
+          centerLatitude: area.center.latitude,
+          centerLongitude: area.center.longitude,
+          radiusMiles: area.radiusMiles
         })
       ) {
         return null;
@@ -98,6 +155,7 @@ export async function fetchOpenSkyFlights(): Promise<Flight[]> {
         latitude,
         longitude,
         callsign: normalizeCallsign(callsign),
+        onGround,
         flightNumber: null,
         airline: deriveAirlineFromCallsign(callsign),
         aircraftType: null,
@@ -110,14 +168,19 @@ export async function fetchOpenSkyFlights(): Promise<Flight[]> {
             ? null
             : Math.round(velocityMetersPerSecond * 1.94384),
         headingDegrees,
+        positionTimestampSec,
+        lastContactTimestampSec,
         registration: null,
         registeredOwner: null
       };
     })
     .filter((flight): flight is Flight => flight != null)
-    .slice(0, 50);
+    .sort((left, right) => getDiscoveryScore(left, area) - getDiscoveryScore(right, area))
+    .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 
-  return enrichFlightsWithAdsbdb(flights);
+  return enrichFlightsWithAeroApiMetadata(enrichFlightsWithAdsbdbFallback(flights), {
+    warm: options?.warmAeroApiFeed ?? true
+  });
 }
 
 function deriveAirlineFromCallsign(callsign: string | null) {

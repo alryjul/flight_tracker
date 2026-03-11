@@ -1,12 +1,21 @@
 import { APP_CONFIG } from "@/lib/config";
 import type { Flight } from "@/lib/flights/types";
 
-const mockFlights: Flight[] = [
+const mockFlightTemplates: Array<
+  Omit<
+    Flight,
+    "latitude" | "longitude"
+  > & {
+    latitudeOffset: number;
+    longitudeOffset: number;
+  }
+> = [
   {
     id: "aal2731",
-    latitude: 33.9762,
-    longitude: -118.4218,
+    latitudeOffset: -0.1139,
+    longitudeOffset: -0.0601,
     callsign: "AAL2731",
+    onGround: false,
     flightNumber: "AA2731",
     airline: "American Airlines",
     aircraftType: "A321",
@@ -15,14 +24,17 @@ const mockFlights: Flight[] = [
     altitudeFeet: 8025,
     groundspeedKnots: 248,
     headingDegrees: 74,
+    positionTimestampSec: null,
+    lastContactTimestampSec: null,
     registration: "N123NN",
     registeredOwner: "American Airlines"
   },
   {
     id: "swa1184",
-    latitude: 34.1731,
-    longitude: -118.3538,
+    latitudeOffset: 0.083,
+    longitudeOffset: 0.0079,
     callsign: "SWA1184",
+    onGround: false,
     flightNumber: "WN1184",
     airline: "Southwest",
     aircraftType: "B738",
@@ -31,14 +43,17 @@ const mockFlights: Flight[] = [
     altitudeFeet: 6250,
     groundspeedKnots: 210,
     headingDegrees: 312,
+    positionTimestampSec: null,
+    lastContactTimestampSec: null,
     registration: "N8674B",
     registeredOwner: "Southwest Airlines"
   },
   {
     id: "dal481",
-    latitude: 34.0528,
-    longitude: -118.2912,
+    latitudeOffset: -0.0373,
+    longitudeOffset: 0.0705,
     callsign: "DAL481",
+    onGround: false,
     flightNumber: "DL481",
     airline: "Delta Air Lines",
     aircraftType: "A220",
@@ -47,14 +62,17 @@ const mockFlights: Flight[] = [
     altitudeFeet: 5480,
     groundspeedKnots: 198,
     headingDegrees: 262,
+    positionTimestampSec: null,
+    lastContactTimestampSec: null,
     registration: "N127DU",
     registeredOwner: "Delta Air Lines"
   },
   {
     id: "asa522",
-    latitude: 34.1197,
-    longitude: -118.4863,
+    latitudeOffset: 0.0296,
+    longitudeOffset: -0.1246,
     callsign: "ASA522",
+    onGround: false,
     flightNumber: "AS522",
     airline: "Alaska Airlines",
     aircraftType: "B39M",
@@ -63,17 +81,26 @@ const mockFlights: Flight[] = [
     altitudeFeet: 9120,
     groundspeedKnots: 286,
     headingDegrees: 128,
+    positionTimestampSec: null,
+    lastContactTimestampSec: null,
     registration: "N915AK",
     registeredOwner: "Alaska Airlines"
   }
 ];
 
-export function buildMockFlights() {
+export function buildMockFlights(
+  center: {
+    latitude: number;
+    longitude: number;
+  } = APP_CONFIG.center
+) {
   const phase = Math.floor(Date.now() / 8000) % 6;
 
-  return mockFlights.map((flight, index) => ({
+  return mockFlightTemplates.map((flight, index) => ({
     ...flight,
-    latitude: flight.latitude + (phase - 2) * 0.004 + index * 0.001,
-    longitude: flight.longitude + (phase - 2) * 0.006 - index * 0.001
+    latitude:
+      center.latitude + flight.latitudeOffset + (phase - 2) * 0.004 + index * 0.001,
+    longitude:
+      center.longitude + flight.longitudeOffset + (phase - 2) * 0.006 - index * 0.001
   }));
 }

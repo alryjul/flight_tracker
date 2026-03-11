@@ -1,6 +1,7 @@
 const TOKEN_URL =
   "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token";
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
+const AUTH_FAILURE_COOLDOWN_MS = 1000 * 60 * 2;
 
 type TokenCache = {
   accessToken: string;
@@ -8,6 +9,7 @@ type TokenCache = {
 };
 
 let tokenCache: TokenCache | null = null;
+let tokenFailureCooldownUntil = 0;
 
 function getLegacyBasicAuthHeader() {
   const username = process.env.OPENSKY_USERNAME;
@@ -32,38 +34,49 @@ async function getOAuthAccessToken() {
     return tokenCache.accessToken;
   }
 
-  const response = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: clientId,
-      client_secret: clientSecret
-    }),
-    cache: "no-store"
-  });
-
-  if (!response.ok) {
-    throw new Error(`OpenSky token request failed with status ${response.status}`);
+  if (Date.now() < tokenFailureCooldownUntil) {
+    return null;
   }
 
-  const data = (await response.json()) as {
-    access_token?: string;
-    expires_in?: number;
-  };
+  try {
+    const response = await fetch(TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret
+      }),
+      cache: "no-store"
+    });
 
-  if (!data.access_token) {
-    throw new Error("OpenSky token response did not include an access token");
+    if (!response.ok) {
+      throw new Error(`OpenSky token request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      access_token?: string;
+      expires_in?: number;
+    };
+
+    if (!data.access_token) {
+      throw new Error("OpenSky token response did not include an access token");
+    }
+
+    tokenCache = {
+      accessToken: data.access_token,
+      expiresAt: Date.now() + (data.expires_in ?? 1800) * 1000
+    };
+
+    tokenFailureCooldownUntil = 0;
+    return tokenCache.accessToken;
+  } catch (error) {
+    tokenFailureCooldownUntil = Date.now() + AUTH_FAILURE_COOLDOWN_MS;
+    console.error("OpenSky OAuth token request failed; falling back to unauthenticated mode", error);
+    return null;
   }
-
-  tokenCache = {
-    accessToken: data.access_token,
-    expiresAt: Date.now() + (data.expires_in ?? 1800) * 1000
-  };
-
-  return tokenCache.accessToken;
 }
 
 export async function getOpenSkyAuthorizationHeader() {
