@@ -171,7 +171,16 @@ const MAX_POSITION_JITTER_DEADBAND_MILES = 0.12;
 // Tuning intuition: bigger τ = laxer chase = more lag, more glide.
 // Smaller τ = stiffer chase = less lag, more reactive (visible "snaps" on
 // turns at very small τ). 6 s is the "ambient buttery glide" sweet spot.
-const SPRING_TAU_SEC = 6;
+const SPRING_TAU_SEC = 8;
+// Why: on page load (or when a flight first enters the viewport), the
+// spring has nowhere to chase if from = target — icons sit static until the
+// next poll lands. We bootstrap by extrapolating the target forward by
+// the reported data lag (now − provider timestamp) along the reported
+// heading × groundspeed, giving the spring an immediate target to chase.
+// Capped because positionTimestampSec can be unreliable for stale or
+// outlier reports — 10 s is a generous ceiling that still bounds visible
+// "wrong direction" extrapolation if heading happens to be wrong.
+const BOOTSTRAP_MAX_EXTRAPOLATION_SEC = 10;
 // Why: tuning factors used in two or more places. Naming them (a) makes the
 // intent obvious at the call site and (b) prevents the values drifting apart
 // when one spot gets tweaked.
@@ -1586,8 +1595,38 @@ function updateFlightAnimationStates(
     const providerTimestampSec = getFlightProviderTimestampSec(flight);
 
     if (!existingState || existingState.identityKey !== identityKey) {
-      // Fresh chase: from = target = current. The spring is "at rest" at
-      // the reported position with zero lag.
+      // Fresh chase. Naively from = target = reported leaves the spring at
+      // rest until the *next* poll lands ~4 s later, so on page load the
+      // icons sit static for an awkward beat. Boost: extrapolate the
+      // target forward by the data lag (now − provider timestamp) along
+      // the reported heading × groundspeed. The spring then has somewhere
+      // to chase from frame 1, producing immediate visible motion.
+      // Strictly position-only — we keep `lastProviderTimestampSec` at the
+      // actual reported time so the trail's cap doesn't lie about how
+      // fresh our data is, preserving the trail-can't-lead-icon invariant.
+      let bootstrapTargetLat = flight.latitude;
+      let bootstrapTargetLon = flight.longitude;
+      if (
+        flight.headingDegrees != null &&
+        flight.groundspeedKnots != null &&
+        flight.groundspeedKnots > 0 &&
+        flight.positionTimestampSec != null
+      ) {
+        const dataLagSec = Math.max(
+          0,
+          Math.min(BOOTSTRAP_MAX_EXTRAPOLATION_SEC, Date.now() / 1000 - flight.positionTimestampSec)
+        );
+        if (dataLagSec > 0) {
+          const distanceMiles = flight.groundspeedKnots * 1.15078 * (dataLagSec / 3600);
+          const headingRad = (flight.headingDegrees * Math.PI) / 180;
+          bootstrapTargetLat =
+            flight.latitude + milesToLatitudeDelta(Math.cos(headingRad) * distanceMiles);
+          bootstrapTargetLon =
+            flight.longitude +
+            milesToLongitudeDelta(Math.sin(headingRad) * distanceMiles, flight.latitude);
+        }
+      }
+
       nextStates.set(flight.id, {
         averageProviderDeltaSec: null,
         fromLatitude: flight.latitude,
@@ -1596,8 +1635,8 @@ function updateFlightAnimationStates(
         fromProviderTimestampSec: providerTimestampSec,
         lastProviderTimestampSec: providerTimestampSec,
         targetSetAt: frameTime,
-        targetLatitude: flight.latitude,
-        targetLongitude: flight.longitude,
+        targetLatitude: bootstrapTargetLat,
+        targetLongitude: bootstrapTargetLon,
         targetGroundspeedKnots: flight.groundspeedKnots,
         targetHeadingDegrees: flight.headingDegrees
       });
