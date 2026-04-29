@@ -26,7 +26,11 @@ const OPERATOR_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 // without triggering 429 cooldowns.
 const MAX_FEED_METADATA_LOOKUPS = 6;
 const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 1;
-const FEED_METADATA_WARM_TARGET = 6;
+// Why: top-10 is roughly the visual top of the strip stack (cards the user
+// is most likely to look at first). Drain is paced at 1 call per 8 s, so
+// 10 in queue = ~80 s — quota-safe even when we're warming both
+// commercial and GA.
+const FEED_METADATA_WARM_TARGET = 10;
 const FEED_METADATA_REQUEST_SPACING_MS = 1000 * 8;
 const FEED_METADATA_RATE_LIMIT_COOLDOWN_MS = 1000 * 45;
 const DETAIL_RATE_LIMIT_COOLDOWN_MS = 1000 * 30;
@@ -680,11 +684,20 @@ export function isStationaryOnGroundFlight(flight: Flight) {
 }
 
 function getFeedWarmPriorityRank(flight: Flight) {
-  if (flight.onGround !== true) {
-    return 0;
-  }
+  // Lower rank = warmed first.
+  // Tier by phase first, then commercial-vs-GA within phase. Commercial
+  // gets priority because (a) AeroAPI hit-rate is much higher for it and
+  // (b) more interesting on the strip "writ large" per ranking calls.
+  // GA still gets warmed — just behind commercial when both are present.
+  const commercialOffset = isCommercialFlight(flight) ? 0 : 1;
 
-  return isStationaryOnGroundFlight(flight) ? 2 : 1;
+  if (flight.onGround !== true) {
+    return 0 + commercialOffset; // airborne: 0 (commercial) or 1 (GA)
+  }
+  if (isStationaryOnGroundFlight(flight)) {
+    return 4 + commercialOffset; // parked: 4 (commercial) or 5 (GA)
+  }
+  return 2 + commercialOffset; // taxiing: 2 (commercial) or 3 (GA)
 }
 
 function needsRouteMetadata(flight: Flight) {
@@ -958,18 +971,23 @@ export async function enrichFlightsWithAeroApiMetadata(
     return mergedFlights;
   }
 
-  const unresolvedCommercialFlights = mergedFlights.filter(
+  // Why: previously this filter was commercial-only, which meant GA
+  // strip cards never got route info populated proactively — even for
+  // GA that DOES have AeroAPI data (LAPD/sheriff helos, IFR cross-
+  // countries, charter under N-callsigns). Drop the commercial-only
+  // gate; getFeedWarmPriorityRank still keeps commercial ahead of GA
+  // at every phase, so commercial dominance is preserved while GA fills
+  // remaining warm slots.
+  const unresolvedFlights = mergedFlights.filter(
     (flight) =>
-      isCommercialFlight(flight) &&
-      needsRouteMetadata(flight) &&
-      !isStationaryOnGroundFlight(flight)
+      needsRouteMetadata(flight) && !isStationaryOnGroundFlight(flight)
   );
 
-  if (unresolvedCommercialFlights.length === 0) {
+  if (unresolvedFlights.length === 0) {
     return mergedFlights;
   }
 
-  const targetFlights = [...unresolvedCommercialFlights]
+  const targetFlights = [...unresolvedFlights]
     .sort(
       (left, right) =>
         getFeedWarmPriorityRank(left) - getFeedWarmPriorityRank(right)
