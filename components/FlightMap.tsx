@@ -1777,6 +1777,27 @@ export function FlightMap() {
   const hoveredFlightIdRef = useRef<string | null>(null);
   const hoveredStripFlightIdRef = useRef<string | null>(null);
   const hoveredStripStartedAtRef = useRef<number | null>(null);
+  // DIAGNOSTIC: detect render storms. If FlightMap renders > 50 times in
+  // 1s, the loop is happening. Logged with debug.error to surface in the
+  // user's console along with the React max-update-depth warning.
+  const renderCountRef = useRef(0);
+  const lastRenderResetRef = useRef(0);
+  if (typeof performance !== "undefined") {
+    const now = performance.now();
+    if (lastRenderResetRef.current === 0) lastRenderResetRef.current = now;
+    renderCountRef.current += 1;
+    const elapsed = now - lastRenderResetRef.current;
+    if (elapsed >= 1000) {
+      if (renderCountRef.current > 50) {
+        console.error(
+          `[render-storm] FlightMap rendered ${renderCountRef.current} times in ${elapsed.toFixed(0)}ms — loop in progress`
+        );
+      }
+      renderCountRef.current = 0;
+      lastRenderResetRef.current = now;
+    }
+  }
+
   const [homeBase, setHomeBase] = useState<HomeBaseCenter>(APP_CONFIG.center);
   const [radiusMiles, setRadiusMiles] = useState<number>(APP_CONFIG.radiusMiles);
   const [areaFlyoutOpen, setAreaFlyoutOpen] = useState(false);
