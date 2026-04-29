@@ -769,9 +769,21 @@ function getSanitizedTrackCoordinates(
 
   let trailEndTimestampMs = lastProviderTrackTimestampMs;
 
+  // Why: only AeroAPI's `/flights/{id}/track` is a *comprehensive* track
+  // (departure to now). When we have one, breadcrumbs that fall before its
+  // tail are duplicates and get filtered. OpenSky's `/tracks/all` is
+  // *sparse* — often just a small cluster near the current position — so
+  // filtering breadcrumbs against its tail timestamp would drop minutes of
+  // useful client-accumulated history and produce the visual "nuke and
+  // repaint from current position" pattern. Track records sourced from
+  // AeroAPI carry a non-null `faFlightId`; OpenSky-only fallbacks don't.
+  const isComprehensiveProviderTrack =
+    track != null && track.faFlightId != null && providerTrack.length > 0;
+
   if (breadcrumbPoints.length > 0) {
     const eligibleBreadcrumbs = breadcrumbPoints.filter(
       (point) =>
+        !isComprehensiveProviderTrack ||
         lastProviderTrackTimestampMs == null ||
         point.providerTimestampSec == null ||
         point.providerTimestampSec * 1000 > lastProviderTrackTimestampMs
