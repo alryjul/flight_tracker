@@ -133,11 +133,24 @@ function isOnOrNearGround(point: AdsbLolTracePoint) {
 //       prevents long over-ocean cruise gaps from being mistaken for leg
 //       breaks — SIA7402 had a 459-min Pacific gap at 33k -> 37k feet that
 //       was a single continuous flight, not a leg break.
+//
+// Important: a "leg break" arms the slicer, but the actual *new leg start*
+// is the next transition back to airborne. If the aircraft resumes
+// transmitting still on the ground (e.g., cold-start at the gate, then
+// taxi for several minutes before takeoff), we wait for the takeoff to
+// mark the leg start. Otherwise the slice would include the post-gap
+// ground portion and — more importantly — would draw a connecting line
+// from the post-gap ground point back through the previous leg's path,
+// because consecutive trace points get joined in the rendered LineString.
 function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
   if (trace.length === 0) return trace;
 
   let lastLegStartIdx = 0;
   let stationaryStartIdx: number | null = null;
+  // Set when we've seen a leg-break signal (gap or sustained stationary)
+  // but the trace hasn't yet returned to airborne. The next non-stationary
+  // point will be marked as the new leg start.
+  let pendingLegBreak = false;
 
   for (let i = 0; i < trace.length; i += 1) {
     const point = trace[i]!;
@@ -150,17 +163,37 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
         gapSec >= ADSBLOL_LEG_BREAK_THRESHOLD_SEC &&
         (isOnOrNearGround(prev) || isOnOrNearGround(point))
       ) {
-        lastLegStartIdx = i;
-        stationaryStartIdx = null;
+        if (isStationaryTracePoint(point)) {
+          // Gap ended while still on the ground (cold-start, pre-takeoff
+          // taxi, etc.). Defer the leg-start marker until takeoff.
+          pendingLegBreak = true;
+          stationaryStartIdx = null;
+        } else {
+          // Gap ended airborne (rare — feeder coverage gap that resolved
+          // mid-air). New leg starts here.
+          lastLegStartIdx = i;
+          stationaryStartIdx = null;
+          pendingLegBreak = false;
+        }
         continue;
       }
     }
 
     // (A) Sustained stationary run.
     if (isStationaryTracePoint(point)) {
-      if (stationaryStartIdx === null) {
+      // While a pending leg break is held, don't restart stationary
+      // tracking — we already know the next airborne point starts a leg.
+      if (stationaryStartIdx === null && !pendingLegBreak) {
         stationaryStartIdx = i;
       }
+      continue;
+    }
+
+    // Non-stationary (airborne or active rollout / climb).
+    if (pendingLegBreak) {
+      lastLegStartIdx = i;
+      pendingLegBreak = false;
+      stationaryStartIdx = null;
       continue;
     }
 
