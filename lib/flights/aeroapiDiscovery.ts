@@ -1,4 +1,5 @@
 import { distanceBetweenPointsMiles, milesToLatitudeDelta, milesToLongitudeDelta } from "@/lib/geo";
+import { getDiscoveryScore } from "@/lib/flights/scoring";
 import type { Flight } from "@/lib/flights/types";
 
 const AEROAPI_BASE_URL = "https://aeroapi.flightaware.com/aeroapi";
@@ -45,38 +46,6 @@ type AeroApiDiscoveryFlight = {
     timestamp: string | null;
   } | null;
 };
-
-function hasCommercialFlightIdentity(flight: Flight) {
-  if (flight.flightNumber) {
-    return true;
-  }
-
-  const callsign = flight.callsign.trim().toUpperCase();
-  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
-}
-
-function getDiscoveryScore(flight: Flight, area: FlightArea) {
-  let score = distanceBetweenPointsMiles({
-    fromLatitude: area.center.latitude,
-    fromLongitude: area.center.longitude,
-    toLatitude: flight.latitude,
-    toLongitude: flight.longitude
-  });
-
-  if (flight.altitudeFeet != null && flight.altitudeFeet < 1500) {
-    score -= 1.5;
-  }
-
-  if (flight.groundspeedKnots != null && flight.groundspeedKnots > 180) {
-    score -= 0.5;
-  }
-
-  if (hasCommercialFlightIdentity(flight)) {
-    score -= 0.75;
-  }
-
-  return score;
-}
 
 function getAeroApiHeaders() {
   const apiKey = process.env.AEROAPI_KEY;
@@ -209,7 +178,7 @@ export async function fetchAeroApiDiscoveryFlights(area: FlightArea): Promise<Fl
   const flights = (data.flights ?? [])
     .map(normalizeFlight)
     .filter((flight): flight is Flight => flight != null)
-    .sort((left, right) => getDiscoveryScore(left, area) - getDiscoveryScore(right, area))
+    .sort((left, right) => getDiscoveryScore(left, area.center) - getDiscoveryScore(right, area.center))
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 
   if (flights.length < MIN_DISCOVERY_FLIGHTS) {

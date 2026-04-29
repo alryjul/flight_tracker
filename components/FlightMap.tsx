@@ -2706,6 +2706,15 @@ export function FlightMap() {
           : data.source
       );
       setSelectedFlightId((currentId) => {
+        // Fallback snapshots (mock-fallback / opensky-unavailable) are
+        // followed by an explicit `setFlights` carve-out that *keeps* the
+        // existing fleet. Mirror that here — derive selection only from
+        // the snapshot's own flight list when we're committing to it.
+        // Otherwise the selected card/trail blanks out during transient
+        // outages even though the visible list is intact.
+        if (isFallbackSnapshot) {
+          return currentId;
+        }
         if (currentId && sortedFlights.some((flight) => flight.id === currentId)) {
           return currentId;
         }

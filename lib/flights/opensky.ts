@@ -11,6 +11,7 @@ import {
   milesToLongitudeDelta
 } from "@/lib/geo";
 import { getOpenSkyAuthorizationHeader } from "@/lib/flights/openskyAuth";
+import { getDiscoveryScore } from "@/lib/flights/scoring";
 import type { Flight } from "@/lib/flights/types";
 
 const DISCOVERY_FLIGHT_CANDIDATE_LIMIT = 80;
@@ -61,37 +62,6 @@ function normalizeCallsign(callsign: string | null) {
   return callsign?.trim() || "Unknown";
 }
 
-function hasCommercialFlightIdentity(flight: Flight) {
-  const callsign = flight.callsign.trim().toUpperCase();
-  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
-}
-
-function getDiscoveryScore(flight: Flight, area: FlightArea) {
-  let score = distanceBetweenPointsMiles({
-    fromLatitude: area.center.latitude,
-    fromLongitude: area.center.longitude,
-    toLatitude: flight.latitude,
-    toLongitude: flight.longitude
-  });
-
-  if (flight.onGround) {
-    score += hasCommercialFlightIdentity(flight) ? 6 : 16;
-  }
-
-  if (flight.altitudeFeet != null && flight.altitudeFeet < 1500 && !flight.onGround) {
-    score -= 1.5;
-  }
-
-  if (flight.groundspeedKnots != null && flight.groundspeedKnots > 180) {
-    score -= 0.5;
-  }
-
-  if (hasCommercialFlightIdentity(flight)) {
-    score -= 0.75;
-  }
-
-  return score;
-}
 
 export async function fetchOpenSkyFlights(
   area: FlightArea = {
@@ -191,7 +161,7 @@ export async function fetchOpenSkyFlights(
     // strip and viewport aren't crowded by stationary aircraft at
     // airports. Matches adsb.lol's discovery filter for parity.
     .filter((flight) => !isStationaryOnGroundFlight(flight))
-    .sort((left, right) => getDiscoveryScore(left, area) - getDiscoveryScore(right, area))
+    .sort((left, right) => getDiscoveryScore(left, area.center) - getDiscoveryScore(right, area.center))
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 
   return enrichFlightsWithAeroApiMetadata(enrichFlightsWithAdsbdbFallback(flights), {

@@ -211,16 +211,16 @@ export async function GET(request: NextRequest) {
   if (tryAdsbLol && Date.now() >= adsbLolDiscoveryCooldownUntil) {
     try {
       const flights = await fetchAdsbLolFlights(area, { warmAeroApiFeed: warmFeedMetadata });
-      if (flights.length > 0) {
-        setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
-        return jsonResponse(
-          { source: "adsblol", center: area.center, radiusMiles: area.radiusMiles, flights },
-          { cacheControl: FRESH_CACHE_HEADER }
-        );
-      }
-      // Empty result is suspicious — let OpenSky have a chance instead of
-      // returning zero flights to the client.
-      console.warn("adsb.lol returned no flights for area; falling back");
+      // Trust the result, including empty. adsb.lol's discovery is reliable;
+      // empty in our viewport is rare but real (4 AM LA, narrow radius). If
+      // we fall through to OpenSky on empty, forced-adsblol mode users
+      // would see mock data when the provider correctly reported nothing.
+      // Genuine adsb.lol failures throw and fall through via the catch.
+      setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
+      return jsonResponse(
+        { source: "adsblol", center: area.center, radiusMiles: area.radiusMiles, flights },
+        { cacheControl: FRESH_CACHE_HEADER }
+      );
     } catch (error) {
       adsbLolDiscoveryCooldownUntil = Date.now() + ADSBLOL_DISCOVERY_COOLDOWN_MS;
       console.error("Failed to load adsb.lol discovery flights", error);
