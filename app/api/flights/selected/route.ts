@@ -196,8 +196,15 @@ export async function GET(request: NextRequest) {
     const adsbdbOrigin =
       flight.flightNumber == null ? adsbdbMetadata?.origin ?? null : null;
     const upstreamOrigin = aeroApiOrigin ?? adsbdbOrigin ?? flight.origin ?? null;
+    // Why: only adsb.lol traces go through isolateCurrentLeg. AeroAPI's
+    // /track and OpenSky's /tracks/all return points with no leg awareness
+    // — their trace[0] could be mid-flight or include yesterday's leg.
+    // Running inferOriginFromTrack on those would happily geocode garbage.
+    // adsb.lol's leg-pruned trace is the only safe input.
     const trackInferredOrigin =
-      upstreamOrigin == null && selectedTrack.length > 0
+      upstreamOrigin == null &&
+      selectedTrack.length > 0 &&
+      selectedTrackProvider === "adsblol"
         ? await inferOriginFromTrack(selectedTrack)
         : null;
     const finalOrigin = upstreamOrigin ?? trackInferredOrigin;

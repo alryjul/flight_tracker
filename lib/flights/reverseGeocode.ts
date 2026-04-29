@@ -25,7 +25,16 @@ type CacheEntry = {
 
 const reverseGeocodeCache = new Map<string, CacheEntry>();
 const reverseGeocodeRequests = new Map<string, Promise<string | null>>();
-let lastReverseGeocodeAt = 0;
+// Why: chained Promise serialization. A Date.now()-based "spacing"
+// check is racy — two concurrent callers both see "sinceLast > 1100"
+// and both fire immediately. Using a chained Promise guarantees the
+// next request can't start until the previous one's spacing window has
+// elapsed, regardless of concurrency.
+let nominatimSerialChain: Promise<unknown> = Promise.resolve();
+// Per-request budget for any single warming batch — if we've already
+// queued enough geocodes that a new one would wait > this, return null
+// immediately instead of stalling /api/flights.
+const REVERSE_GEOCODE_BATCH_BUDGET_MS = 2500;
 
 function getCacheKey(lat: number, lon: number) {
   return `${lat.toFixed(4)},${lon.toFixed(4)}`;
@@ -104,16 +113,29 @@ export async function reverseGeocodeLocationLabel(
     return inFlight;
   }
 
+  // Per-request batch budget tracking: if too many geocodes queue up
+  // behind the serialization chain, give up on the new one rather than
+  // letting it block /api/flights for seconds.
+  const enqueuedAt = Date.now();
+  const queueWaitWillExceedBudget = () =>
+    Date.now() - enqueuedAt > REVERSE_GEOCODE_BATCH_BUDGET_MS;
+
   const request = (async (): Promise<string | null> => {
-    // Soft per-process spacing — Nominatim's public instance asks for
-    // ≤ 1 req/sec. Wait if we'd exceed.
-    const sinceLast = Date.now() - lastReverseGeocodeAt;
-    if (sinceLast < REVERSE_GEOCODE_REQUEST_SPACING_MS) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, REVERSE_GEOCODE_REQUEST_SPACING_MS - sinceLast)
+    // Serialize via the chain. Each new geocode waits for the prior
+    // one's spacing window to complete. Race-free under concurrency.
+    const myTurn = nominatimSerialChain
+      .catch(() => undefined)
+      .then(
+        () => new Promise<void>((resolve) => setTimeout(resolve, REVERSE_GEOCODE_REQUEST_SPACING_MS))
       );
+    nominatimSerialChain = myTurn;
+    await myTurn;
+
+    if (queueWaitWillExceedBudget()) {
+      // Took too long to get our turn — bail without caching so a future
+      // request can try again.
+      return null;
     }
-    lastReverseGeocodeAt = Date.now();
 
     const url =
       `${NOMINATIM_BASE}/reverse?` +

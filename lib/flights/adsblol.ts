@@ -164,8 +164,12 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
   let stationaryStartIdx: number | null = null;
   // Set when we've seen a leg-break signal (gap or sustained stationary)
   // but the trace hasn't yet returned to airborne. The next non-stationary
-  // point will be marked as the new leg start.
+  // point will be marked as the new leg start. We also remember WHERE the
+  // gap ended so that if the trace ENDS before any takeoff (cold-start
+  // aircraft still on the ramp at fetch time), we can fall back to the
+  // post-gap index instead of returning the whole multi-leg trace.
   let pendingLegBreak = false;
+  let pendingLegBreakIdx: number | null = null;
 
   for (let i = 0; i < trace.length; i += 1) {
     const point = trace[i]!;
@@ -183,8 +187,11 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
       if (isLongGap || isShortGapWithGroundTouch) {
         if (isStationaryTracePoint(point)) {
           // Gap ended while still on the ground (cold-start, pre-takeoff
-          // taxi, etc.). Defer the leg-start marker until takeoff.
+          // taxi, etc.). Defer the leg-start marker until takeoff. Remember
+          // this index so we can fall back to it at end-of-loop if takeoff
+          // never happens within the trace window.
           pendingLegBreak = true;
+          pendingLegBreakIdx = i;
           stationaryStartIdx = null;
         } else {
           // Gap ended airborne (post-gap takeoff, or coverage hole that
@@ -192,6 +199,7 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
           lastLegStartIdx = i;
           stationaryStartIdx = null;
           pendingLegBreak = false;
+          pendingLegBreakIdx = null;
         }
         continue;
       }
@@ -211,6 +219,7 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
     if (pendingLegBreak) {
       lastLegStartIdx = i;
       pendingLegBreak = false;
+      pendingLegBreakIdx = null;
       stationaryStartIdx = null;
       continue;
     }
@@ -222,6 +231,19 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
       }
       stationaryStartIdx = null;
     }
+  }
+
+  // Fallback: trace ended without ever resolving the pending leg break
+  // (cold-start aircraft still on the ramp at fetch time). Slice from
+  // the gap-end index — that's the start of the new operation, even if
+  // the takeoff hasn't happened yet. Without this we'd return the entire
+  // multi-leg trace including yesterday's flying, defeating leg pruning.
+  if (
+    pendingLegBreak &&
+    pendingLegBreakIdx !== null &&
+    pendingLegBreakIdx > lastLegStartIdx
+  ) {
+    lastLegStartIdx = pendingLegBreakIdx;
   }
 
   return lastLegStartIdx === 0 ? trace : trace.slice(lastLegStartIdx);
@@ -550,7 +572,12 @@ function adsbLolAircraftToFlight(
 // (where it works) and using traces for GA (where AeroAPI doesn't
 // work anyway) is a clean trade.
 
-const TRACK_ORIGIN_HIT_TTL_MS = 1000 * 60 * 60 * 2;
+// Why: 30 min hit TTL bounds staleness to one short-haul-leg duration.
+// Aircraft that complete a leg and start a new one (e.g., a Cessna doing
+// pattern-and-go: KSMO → KHHR → KSMO over 90 min) get re-inferred once
+// per 30 min. Was 2 h before, which let cached origins persist across
+// multiple legs and disagree with AeroAPI's fresher data → visible flap.
+const TRACK_ORIGIN_HIT_TTL_MS = 1000 * 60 * 30;
 const TRACK_ORIGIN_NULL_TTL_MS = 1000 * 60 * 5;
 const TRACK_ORIGIN_CACHE_MAX_ENTRIES = 500;
 const TRACK_ORIGIN_WARM_TARGET = 5;
@@ -660,8 +687,13 @@ export async function enrichFlightsWithTrackInferredOrigin(
   const warm = options?.warm ?? true;
   const center = options?.center;
 
+  // Why: track inference takes PRECEDENCE over upstream-set origin (which
+  // may be a stale AeroAPI cache hit from a prior leg). The trace's first
+  // leg-pruned point reflects actual current-leg takeoff position; AeroAPI
+  // can serve up-to-2-hour-stale cache that points at yesterday's origin.
+  // When track inference has a cached value, it wins. AeroAPI's
+  // destination/airline/flightNumber survive untouched.
   const merged = flights.map((flight) => {
-    if (flight.origin != null) return flight;
     const cached = getCachedTrackOrigin(flight.id);
     if (cached === undefined || cached == null) return flight;
     return { ...flight, origin: cached };

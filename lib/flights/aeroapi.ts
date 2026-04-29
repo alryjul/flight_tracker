@@ -536,16 +536,28 @@ const HTTP_RESPONSE_CACHE_MAX_ENTRIES = 200;
 const httpResponseCache = new Map<string, CacheEntry<unknown>>();
 const httpInFlightRequests = new Map<string, Promise<unknown>>();
 
-async function fetchJson<T>(path: string): Promise<T | null> {
+async function fetchJson<T>(
+  path: string,
+  options?: { bypassCache?: boolean }
+): Promise<T | null> {
   const headers = getAeroApiHeaders();
 
   if (!headers) {
     throw new Error("Missing AeroAPI credentials");
   }
 
-  const cached = getCachedValue(httpResponseCache, path);
-  if (cached !== undefined) {
-    return cached as T | null;
+  const bypassCache = options?.bypassCache ?? false;
+
+  if (!bypassCache) {
+    const cached = getCachedValue(httpResponseCache, path);
+    if (cached !== undefined) {
+      return cached as T | null;
+    }
+  } else {
+    // Why: explicit bypass — eg. user clicked "refresh." Drop any cached
+    // entry so the layered detail/feed null-cache caller doesn't get a
+    // stale 404/200 from this layer.
+    httpResponseCache.delete(path);
   }
 
   const inFlight = httpInFlightRequests.get(path);
@@ -621,14 +633,18 @@ async function resolveOperatorName(operatorCode: string | null) {
 
 async function resolveBestFlightRecord(
   flight: Flight,
-  options?: { exhaustive?: boolean; requireCurrent?: boolean }
+  options?: { exhaustive?: boolean; requireCurrent?: boolean; bypassCache?: boolean }
 ) {
   const candidates: AeroApiFlightRecord[] = [];
   const exhaustive = options?.exhaustive ?? false;
   const requireCurrent = options?.requireCurrent ?? false;
+  const bypassCache = options?.bypassCache ?? false;
 
   for (const identifier of getLookupIdentifiersForFlight(flight)) {
-    const data = await fetchJson<AeroApiFlightResponse>(`/flights/${encodeURIComponent(identifier)}`);
+    const data = await fetchJson<AeroApiFlightResponse>(
+      `/flights/${encodeURIComponent(identifier)}`,
+      { bypassCache }
+    );
 
     for (const candidate of data?.flights ?? []) {
       candidates.push(candidate);
@@ -694,7 +710,12 @@ async function fetchTrack(faFlightId: string | null) {
 }
 
 function getDetailCacheKey(flight: Flight) {
+  // Why: icao24 (flight.id) included so two distinct aircraft with the
+  // same null/null/null tuple — common for TIS-B anonymous N-reg blanks
+  // — don't collide in the cache. Identity-changes (callsign reassign)
+  // also generate a fresh key, so old entries naturally LRU-evict.
   return [
+    flight.id.toLowerCase(),
     normalizedUpper(flight.callsign) ?? "unknown",
     normalizedUpper(flight.flightNumber) ?? "unknown",
     normalizedUpper(flight.registration) ?? "unknown"
@@ -1135,7 +1156,8 @@ export async function fetchAeroApiSelectedFlightDetails(
     try {
       const currentBestMatch = await resolveBestFlightRecord(flight, {
         exhaustive: true,
-        requireCurrent: true
+        requireCurrent: true,
+        bypassCache
       });
 
       if (!currentBestMatch) {

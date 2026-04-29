@@ -457,8 +457,38 @@ function looksLikeAgencyLabel(value: string | null) {
   return /(POLICE|SHERIFF|FIRE|PATROL|AIR SUPPORT|DEPARTMENT)/i.test(value);
 }
 
-function getRouteFallbackLabel(flight: Flight) {
+// Why: a transient null/missing squawk between confirmed VFR squawks
+// shouldn't flip the strip card from "VFR" → "Route pending" → "VFR".
+// We latch the "VFR" status for an identity for a short window; once
+// the squawk transitions to a real non-VFR code the latch is broken
+// (the aircraft is genuinely no longer VFR).
+const VFR_LATCH_DURATION_MS = 30_000;
+const vfrLatchedAtByIdentity = new Map<string, number>();
+
+function getVfrLatchKey(flight: Flight) {
+  return getLiveFlightIdentityKey(flight);
+}
+
+function refreshVfrLatchIfApplicable(flight: Flight) {
   if (isOperatingVfr(flight)) {
+    vfrLatchedAtByIdentity.set(getVfrLatchKey(flight), performance.now());
+  }
+}
+
+function isFlightVfrForLabel(flight: Flight) {
+  if (isOperatingVfr(flight)) return true;
+  // Real non-VFR squawk → break the latch (aircraft transitioned).
+  const squawk = flight.squawk?.trim();
+  if (squawk && squawk.length > 0) return false;
+  // Squawk is null/missing → may be a transponder cycle. Honor the
+  // recent-VFR latch.
+  const latchedAt = vfrLatchedAtByIdentity.get(getVfrLatchKey(flight));
+  if (latchedAt == null) return false;
+  return performance.now() - latchedAt <= VFR_LATCH_DURATION_MS;
+}
+
+function getRouteFallbackLabel(flight: Flight) {
+  if (isFlightVfrForLabel(flight)) {
     return "VFR";
   }
   // Why: previously "Local flight" for GA, "Route pending" for commercial.
@@ -1650,12 +1680,32 @@ function updateFlightAnimationStates(
       }) === getFlightPositionSnapshotKey(flight);
 
     if (targetUnchanged) {
-      // Same target — let the spring continue from wherever it is. We just
-      // refresh aux fields.
+      // Same position target, but the provider timestamp may have advanced
+      // (deadband suppressed a small move; aircraft is hovering or parked).
+      // We MUST re-anchor the cap-timestamp spring — leaving fromProviderT
+      // and targetSetAt unchanged while bumping lastProviderT produces a
+      // discontinuous jump in the cap of ~one poll-interval, breaking the
+      // position/cap symmetry that prevents trail-leading-icon for any
+      // hovering helicopter or parked aircraft.
+      //
+      // Re-anchoring both the position and the cap to the current frame
+      // time keeps them in lockstep (same τ, same elapsed clock). Position
+      // chase stays smooth because targetLat/Lon didn't change.
+      const currentSpringPositionUnchanged = computeSpringPosition(
+        existingState,
+        frameTime
+      );
+      const currentSpringProviderTimestampSecUnchanged =
+        computeSpringProviderTimestampSec(existingState, frameTime);
+
       nextStates.set(flight.id, {
         ...existingState,
         averageProviderDeltaSec,
+        fromLatitude: currentSpringPositionUnchanged.latitude,
+        fromLongitude: currentSpringPositionUnchanged.longitude,
+        fromProviderTimestampSec: currentSpringProviderTimestampSecUnchanged,
         lastProviderTimestampSec: providerTimestampSec ?? existingState.lastProviderTimestampSec,
+        targetSetAt: frameTime,
         targetGroundspeedKnots: flight.groundspeedKnots,
         targetHeadingDegrees: flight.headingDegrees
       });
@@ -3195,6 +3245,11 @@ export function FlightMap() {
             selectedRenderedPosition = renderedPosition;
           }
 
+          // Why: refresh the per-identity VFR latch so a transient null
+          // squawk doesn't flip the strip-card label from "VFR" away.
+          // See VFR_LATCH_DURATION_MS / isFlightVfrForLabel.
+          refreshVfrLatchIfApplicable(flight);
+
           return {
             type: "Feature" as const,
             geometry: {
@@ -3221,15 +3276,32 @@ export function FlightMap() {
       if (selectedId == null) {
         clearSelectedTrackSource(trackSource);
       } else {
+        // Why: when the selected flight is being rendered via cached
+        // metadata + breadcrumbs (linger fallback — the selected id isn't
+        // in displayFlightsRef this frame), the .map() loop above didn't
+        // assign selectedRenderedPosition. Without a fallback the
+        // trail-leads-dot defenses (ahead-of-icon breadcrumb filter +
+        // icon-tail-append) silently disable themselves in exactly the
+        // mode the linger logic was added for. Compute a fallback
+        // position from the animation state if we have one.
+        const lingerRenderedPosition =
+          selectedRenderedPosition ??
+          (selectedAnimationState
+            ? computeSpringPosition(selectedAnimationState, frameTime)
+            : null);
         setSelectedTrackSourceData(
           trackSource,
           selectedId,
           activeSelectedTrack,
           activeBreadcrumbPoints,
-          selectedRenderedPosition,
+          lingerRenderedPosition,
           selectedDisplayedProviderTimestampMs,
           selectedAnimationState?.targetHeadingDegrees ?? null
         );
+        if (selectedRenderedPosition == null && lingerRenderedPosition != null) {
+          // Cache for the diagnostic block + cross-effect uses.
+          selectedRenderedPosition = lingerRenderedPosition;
+        }
       }
 
       // [trail-debug] Optional diagnostic. Enable in DevTools console:
