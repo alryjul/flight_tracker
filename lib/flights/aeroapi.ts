@@ -1018,14 +1018,14 @@ export async function fetchAeroApiSelectedFlightDetails(
     return cached;
   }
 
-  // Why: AeroAPI doesn't index private GA. Skip the upstream call entirely
-  // and short-circuit with a long-lived null cache so we don't ask again
-  // every time the user clicks the same N-reg helicopter.
-  if (isLikelyGeneralAviationFlight(flight)) {
-    setCachedValue(detailCache, cacheKey, null, GA_DETAIL_NULL_TTL_MS, DETAIL_CACHE_MAX_ENTRIES);
-    return null;
-  }
-
+  // Why: previously we short-circuited GA entirely on the assumption that
+  // AeroAPI never has data for N-reg flights. That's mostly true for VFR
+  // pattern work, but it also blocks the cases that DO file plans and
+  // therefore DO show up in AeroAPI: LAPD/sheriff helicopters, IFR GA
+  // cross-countries, charter under N-callsigns, SMO commuter ops. The
+  // long null-TTL below (GA_DETAIL_NULL_TTL_MS) means an unfiled Cessna
+  // that misses still doesn't re-hit AeroAPI for 30 min, so we get the
+  // benefit of trying without the cost of spamming.
   if (Date.now() < detailCooldownUntil) {
     return null;
   }
@@ -1044,7 +1044,15 @@ export async function fetchAeroApiSelectedFlightDetails(
       });
 
       if (!currentBestMatch) {
-        setCachedValue(detailCache, cacheKey, null, DETAIL_NULL_TTL_MS, DETAIL_CACHE_MAX_ENTRIES);
+        // GA gets the long null TTL — most N-reg pattern Cessnas have no
+        // filed plan and won't ever get one this session, so caching the
+        // miss for 30 min prevents AeroAPI spam on repeated selections.
+        // Commercial misses keep the short TTL because their state (filed
+        // vs unfiled, FA-flight-id assignment) can change quickly.
+        const nullTtlMs = isLikelyGeneralAviationFlight(flight)
+          ? GA_DETAIL_NULL_TTL_MS
+          : DETAIL_NULL_TTL_MS;
+        setCachedValue(detailCache, cacheKey, null, nullTtlMs, DETAIL_CACHE_MAX_ENTRIES);
         return null;
       }
 
