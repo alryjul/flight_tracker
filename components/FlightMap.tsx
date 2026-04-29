@@ -125,8 +125,43 @@ const PROXIMITY_RING_MILES = [3, 8];
 const HOME_BASE_STORAGE_KEY = "flight-tracker-home-base";
 const VISIBLE_FLIGHT_LIMIT = 50;
 const VISIBLE_FLIGHT_ENTRY_COUNT = 45;
-const VISIBLE_FLIGHT_EXIT_RANK = 60;
-const VISIBLE_FLIGHT_LINGER_MS = 1000 * 45;
+// Why: bumping the exit rank from 60 → 80 widens the hysteresis band a
+// flight has to cross before it gets retracted. Combined with the score's
+// hard horizons (which prevent far-away GA from competing for top-50 slots
+// at all), this leaves the visible set very stable over time.
+const VISIBLE_FLIGHT_EXIT_RANK = 80;
+// Why: 60 s linger means a flight that just slipped past the exit rank
+// hangs around long enough for a couple of polls to confirm or refute the
+// drop, masking any remaining single-poll score jitter.
+const VISIBLE_FLIGHT_LINGER_MS = 1000 * 60;
+
+// --- Ranking tuning ---
+// The visibility score is base distance from home + adjustments. Tiered:
+//   • Within MAGIC_ZONE_MILES: capped negative score → always top-of-list.
+//     If you can see it from the front yard, it deserves a slot.
+//   • GA beyond GA_HORIZON_MILES: hard buried (Cessna patterns in Pomona
+//     stop competing for visibility, ever).
+//   • Anything beyond COMMERCIAL_HORIZON_MILES: hard buried (long-range
+//     overflights past our useful range).
+//   • Inside the eligible bands: weighted bonuses for commercial identity,
+//     low altitude (visible approach/departure), and a penalty for cruise
+//     altitude (boring overhead dot).
+//
+// The hard horizons are the main churn-killer: they prevent fringe-rank
+// flights from oscillating in/out of the visible set on noise.
+const RANKING_MAGIC_ZONE_MILES = 8;
+const RANKING_GA_HORIZON_MILES = 12;
+const RANKING_COMMERCIAL_HORIZON_MILES = 25;
+const RANKING_COMMERCIAL_BONUS_MILES = 8;
+const RANKING_LOW_ALTITUDE_BONUS_MILES = 6;
+const RANKING_LOW_ALTITUDE_FEET = 3000;
+const RANKING_HIGH_CRUISE_PENALTY_MILES = 3;
+const RANKING_HIGH_CRUISE_FEET = 30000;
+const RANKING_GROUND_PENALTY_MILES = 25;
+const RANKING_COMMERCIAL_GROUND_PENALTY_MILES = 8;
+const RANKING_HARD_BURY_OFFSET = 100;
+const RANKING_SOFT_BURY_OFFSET = 50;
+const RANKING_MAGIC_ZONE_OFFSET = 100;
 const STRIP_REORDER_INTERVAL_MS = 24000;
 const STRIP_REORDER_RANK_THRESHOLD = 2;
 const STRIP_REORDER_SCORE_THRESHOLD = 1.25;
@@ -657,37 +692,47 @@ function getDistanceFromHomeBaseMiles(flight: Flight, center: HomeBaseCenter) {
   });
 }
 
-function isInterestingOnGroundFlight(flight: Flight) {
-  if (flight.onGround == null) {
-    return false;
-  }
-
-  if (!flight.onGround) {
-    return false;
-  }
-
-  return hasCommercialFlightIdentity(flight) || flight.groundspeedKnots != null && flight.groundspeedKnots > 30;
-}
-
 function getVisibilityScore(flight: Flight, center: HomeBaseCenter) {
-  let score = getDistanceFromHomeBaseMiles(flight, center);
+  const miles = getDistanceFromHomeBaseMiles(flight, center);
+  const isCommercial = hasCommercialFlightIdentity(flight);
 
+  // Magic zone — anything inside this radius wins regardless of phase or
+  // type. The cap at (miles - OFFSET) keeps these flights ordered by
+  // distance among themselves but firmly above everything else.
+  if (miles <= RANKING_MAGIC_ZONE_MILES) {
+    return miles - RANKING_MAGIC_ZONE_OFFSET;
+  }
+
+  // Hard horizons — flights past the relevant horizon can't compete for
+  // top-50 slots. This is the main churn killer: a fringe-rank flight far
+  // away can't oscillate in/out of the visible set on tiny distance noise.
+  if (!isCommercial && miles > RANKING_GA_HORIZON_MILES) {
+    return miles + RANKING_HARD_BURY_OFFSET;
+  }
+  if (miles > RANKING_COMMERCIAL_HORIZON_MILES) {
+    return miles + RANKING_SOFT_BURY_OFFSET;
+  }
+
+  // In-range adjustments
+  let score = miles;
+  if (isCommercial) {
+    score -= RANKING_COMMERCIAL_BONUS_MILES;
+  }
   if (flight.onGround) {
-    score += isInterestingOnGroundFlight(flight) ? 6 : 16;
+    // Taxiing heavies at LAX are still interesting. Parked GA at SMO are
+    // not. Different penalties.
+    score += isCommercial
+      ? RANKING_COMMERCIAL_GROUND_PENALTY_MILES
+      : RANKING_GROUND_PENALTY_MILES;
+  } else if (flight.altitudeFeet != null) {
+    if (flight.altitudeFeet < RANKING_LOW_ALTITUDE_FEET) {
+      // Visible approach / departure — surface this strongly.
+      score -= RANKING_LOW_ALTITUDE_BONUS_MILES;
+    } else if (flight.altitudeFeet > RANKING_HIGH_CRUISE_FEET) {
+      // Cruise overhead is a pinpoint dot — less ambient interest.
+      score += RANKING_HIGH_CRUISE_PENALTY_MILES;
+    }
   }
-
-  if (flight.altitudeFeet != null && flight.altitudeFeet < 1500 && !flight.onGround) {
-    score -= 1.5;
-  }
-
-  if (flight.groundspeedKnots != null && flight.groundspeedKnots > 180) {
-    score -= 0.5;
-  }
-
-  if (hasCommercialFlightIdentity(flight)) {
-    score -= 0.75;
-  }
-
   return score;
 }
 
@@ -3734,7 +3779,7 @@ export function FlightMap() {
       <aside className="flight-card-stack">
         <div className="stack-header">
           <p className="eyebrow">Current Aircraft</p>
-          <h2>{flights.length} flights in view</h2>
+          <h2>{displayFlights.length} flights in view</h2>
           {nearestFlight ? (
             <button
               className="nearest-chip"
