@@ -173,7 +173,19 @@ function normalizeRouteEndpointValue(input: {
   return input.iata_code || input.icao_code || input.municipality || input.name || null;
 }
 
+// Why: adsb.lol's discovery feed includes anonymous TIS-B targets with
+// non-ICAO24 identifiers (prefixed with ~ or other non-hex characters)
+// that ADSBdb rejects with 400. Skip the call entirely for these to
+// avoid log spam and unnecessary network round-trips.
+function isValidIcao24(icao24: string) {
+  return /^[0-9a-f]{6}$/i.test(icao24);
+}
+
 async function fetchAircraftMetadata(icao24: string) {
+  if (!isValidIcao24(icao24)) {
+    return null;
+  }
+
   const cached = getCachedValue(aircraftCache, icao24);
 
   if (cached !== undefined) {
@@ -192,6 +204,12 @@ async function fetchAircraftMetadata(icao24: string) {
     });
 
     if (response.status === 404) {
+      setCachedValue(aircraftCache, icao24, null, AIRCRAFT_TTL_MS, AIRCRAFT_CACHE_MAX_ENTRIES);
+      return null;
+    }
+
+    // 400/422 are typically permanent (malformed id) — cache null long-term.
+    if (response.status === 400 || response.status === 422) {
       setCachedValue(aircraftCache, icao24, null, AIRCRAFT_TTL_MS, AIRCRAFT_CACHE_MAX_ENTRIES);
       return null;
     }
@@ -293,6 +311,10 @@ function looksLikeCommercialFlight(flight: Flight) {
 }
 
 async function fetchCombinedMetadata(icao24: string, callsign: string) {
+  if (!isValidIcao24(icao24)) {
+    return null;
+  }
+
   const normalizedCallsign = normalizeLookupCallsign(callsign);
 
   if (!normalizedCallsign) {
@@ -324,6 +346,11 @@ async function fetchCombinedMetadata(icao24: string, callsign: string) {
     );
 
     if (response.status === 404) {
+      setCachedValue(combinedCache, cacheKey, null, COMBINED_TTL_MS, COMBINED_CACHE_MAX_ENTRIES);
+      return null;
+    }
+
+    if (response.status === 400 || response.status === 422) {
       setCachedValue(combinedCache, cacheKey, null, COMBINED_TTL_MS, COMBINED_CACHE_MAX_ENTRIES);
       return null;
     }
