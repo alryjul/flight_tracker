@@ -29,6 +29,23 @@ export const RANKING_HARD_BURY_OFFSET = 100;
 export const RANKING_SOFT_BURY_OFFSET = 50;
 export const RANKING_MAGIC_ZONE_OFFSET = 100;
 
+// Why: ICAO airline callsigns are 3 letters + a flight number digit
+// (e.g., UAL2019, SKW4726). N-prefixed registrations look like
+// `N<digit>...` so we explicitly exclude them — `N123AB` is a GA
+// registration, not a commercial flight number. Single source of truth
+// to prevent the four near-duplicates we used to have drifting.
+const COMMERCIAL_CALLSIGN_PATTERN = /^[A-Z]{3}\d/;
+const GA_N_REGISTRATION_PATTERN = /^N\d/;
+
+export function isCommercialCallsignString(callsign: string | null | undefined) {
+  if (callsign == null) return false;
+  const normalized = callsign.trim().toUpperCase();
+  return (
+    COMMERCIAL_CALLSIGN_PATTERN.test(normalized) &&
+    !GA_N_REGISTRATION_PATTERN.test(normalized)
+  );
+}
+
 // Why: shared callsign-prefix check used by feed enrichment, the
 // selected-flight metadata trust check, and the strip operator-label
 // rendering. Exported so we don't drift between scoring.ts and
@@ -37,8 +54,7 @@ export function hasCommercialFlightIdentity(flight: Flight) {
   if (flight.flightNumber) {
     return true;
   }
-  const callsign = flight.callsign.trim().toUpperCase();
-  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
+  return isCommercialCallsignString(flight.callsign);
 }
 
 // Why: server-side scoring runs BEFORE AeroAPI feed-metadata enrichment,
@@ -47,8 +63,7 @@ export function hasCommercialFlightIdentity(flight: Flight) {
 // hasCommercialFlightIdentity (which also considers flightNumber, set by
 // enrichment).
 function isCommercialCallsignIdentity(flight: Flight) {
-  const callsign = flight.callsign.trim().toUpperCase();
-  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
+  return isCommercialCallsignString(flight.callsign);
 }
 
 // Internal: applies the tier model given a precomputed isCommercial flag.

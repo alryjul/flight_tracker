@@ -582,6 +582,11 @@ const TRACK_ORIGIN_NULL_TTL_MS = 1000 * 60 * 5;
 const TRACK_ORIGIN_CACHE_MAX_ENTRIES = 500;
 const TRACK_ORIGIN_WARM_TARGET = 5;
 const TRACK_ORIGIN_WARM_REQUEST_SPACING_MS = 2000;
+// Why: parity with FEED_METADATA_WARM_MAX_ENTRIES — without a cap,
+// trackOriginWarmFlights grows unbounded if the pump stalls (adsb.lol
+// errors, slow trace fetch). Each entry holds a full Flight reference.
+// 50 is generous enough to absorb churn but bounded.
+const TRACK_ORIGIN_WARM_MAX_ENTRIES = 50;
 
 type TrackOriginCacheEntry = {
   origin: string | null;
@@ -608,10 +613,12 @@ function getCachedTrackOrigin(icao24: string) {
 }
 
 function setCachedTrackOrigin(icao24: string, origin: string | null) {
-  if (
-    !trackOriginCache.has(icao24) &&
-    trackOriginCache.size >= TRACK_ORIGIN_CACHE_MAX_ENTRIES
-  ) {
+  // Why: delete-then-set so a re-write moves the entry to "most recent"
+  // in insertion order. Without this, repeatedly setting the same key
+  // never bubbles the entry up the LRU and it eventually evicts despite
+  // being actively used.
+  trackOriginCache.delete(icao24);
+  if (trackOriginCache.size >= TRACK_ORIGIN_CACHE_MAX_ENTRIES) {
     const oldest = trackOriginCache.keys().next().value;
     if (oldest !== undefined) trackOriginCache.delete(oldest);
   }
@@ -666,6 +673,32 @@ function queueTrackOriginWarm(flights: Flight[]) {
     trackOriginWarmFlights.set(flight.id, flight);
     trackOriginWarmQueue.push(flight.id);
   }
+
+  // Why: cap the warm pool. If the queue grows faster than it drains
+  // (e.g., adsb.lol error storm, slow trace fetches), drop the oldest
+  // pending entries so we don't accumulate unbounded references.
+  if (trackOriginWarmFlights.size > TRACK_ORIGIN_WARM_MAX_ENTRIES) {
+    const overflow = trackOriginWarmFlights.size - TRACK_ORIGIN_WARM_MAX_ENTRIES;
+    const dropped: string[] = [];
+    const iterator = trackOriginWarmFlights.keys();
+    for (let i = 0; i < overflow; i += 1) {
+      const next = iterator.next();
+      if (next.done || next.value == null) break;
+      dropped.push(next.value);
+    }
+    for (const key of dropped) {
+      trackOriginWarmFlights.delete(key);
+    }
+    if (dropped.length > 0) {
+      const droppedSet = new Set(dropped);
+      for (let i = trackOriginWarmQueue.length - 1; i >= 0; i -= 1) {
+        if (droppedSet.has(trackOriginWarmQueue[i]!)) {
+          trackOriginWarmQueue.splice(i, 1);
+        }
+      }
+    }
+  }
+
   scheduleTrackOriginWarmPump();
 }
 

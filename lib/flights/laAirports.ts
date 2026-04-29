@@ -6,7 +6,9 @@
 // nothing on file.
 //
 // Coordinates are Wikipedia/AirNav airport reference points — close
-// enough for a 0.3 mi proximity match (a typical airport perimeter).
+// enough for the 2.0 mi proximity match used by inferOriginFromTrack
+// (which catches the typical 0.5-2 mi climbout phase distance, not just
+// the runway itself).
 // Add or correct entries here when you notice a flight whose takeoff
 // position should have been recognized but wasn't.
 

@@ -10,12 +10,14 @@ import type { Flight } from "@/lib/flights/types";
 // visual flight rules with no flight plan filed."
 //
 // 0200-0277 is the discrete-code range SoCal Approach commonly assigns
-// to VFR traffic in the LA basin for VFR flight following. Aircraft on
-// the LA-area common pattern (e.g., trainers around SMO/HHR/CMA, news
-// helos, LAPD birds) frequently get a code in this range. For our app
-// (centered on WeHo), this is a strong "VFR" signal — IFR flights
-// would have AeroAPI data via filed plans, so a discrete-code SoCal
-// flight without route data is almost always VFR.
+// to VFR traffic in the LA basin for VFR flight following. Squawks are
+// inherently OCTAL (each digit 0-7), so 0200-0277 means "first two
+// digits = 02, last two ∈ 00-77." The regex `^02[0-7][0-7]$` matches
+// exactly that. Aircraft on the LA-area common pattern (e.g., trainers
+// around SMO/HHR/CMA, news helos, LAPD birds) frequently get a code in
+// this range. For our app (centered on WeHo), this is a strong "VFR"
+// signal — IFR flights would have AeroAPI data via filed plans, so a
+// discrete-code SoCal flight without route data is almost always VFR.
 //
 // Note: 0200-0277 codes are SoCal-specific; we'd need a different
 // heuristic for other regions. If the home base ever moves outside

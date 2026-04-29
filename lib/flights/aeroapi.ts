@@ -2,7 +2,7 @@ import {
   parseLatLonPseudoCode,
   reverseGeocodeLocationLabel
 } from "@/lib/flights/reverseGeocode";
-import { getDiscoveryScore } from "@/lib/flights/scoring";
+import { getDiscoveryScore, isCommercialCallsignString } from "@/lib/flights/scoring";
 import { isUnlikelyToHaveAeroApiData } from "@/lib/flights/squawk";
 import type { Flight } from "@/lib/flights/types";
 
@@ -731,13 +731,10 @@ export function hasAeroApiCredentials() {
 }
 
 function isCommercialFlight(flight: Flight) {
-  const callsign = normalizedUpper(flight.callsign);
-
   if (flight.flightNumber) {
     return true;
   }
-
-  return callsign != null && /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
+  return isCommercialCallsignString(flight.callsign);
 }
 
 // Why: exported so discovery providers can filter out parked/long-stopped

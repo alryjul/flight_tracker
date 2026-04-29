@@ -156,6 +156,14 @@ const SNAPSHOT_HISTORY_RETENTION_MS = refreshMs * 18;
 // below is independent of the snapshot pruning.
 const FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS = 600;
 const FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS = 1000 * 60 * 30;
+// Why: a gap larger than this in a per-flight breadcrumb buffer is a
+// strong signal of a landing → ramp time → takeoff sequence (the aircraft
+// stops transmitting on the ground for many minutes). When that happens
+// the prior leg's breadcrumbs would otherwise paint a connecting line
+// from the old leg's last position to the new leg's start. Wipe the
+// buffer so each leg's breadcrumbs are independent. Mirrors adsb.lol's
+// isolateCurrentLeg threshold.
+const BREADCRUMB_LEG_BREAK_GAP_MS = 1000 * 60 * 15;
 const SELECTED_TRACK_REFRESH_GRACE_MS = 1000 * 30;
 const MAX_TRACK_SEGMENT_MILES = 320;
 const MAX_TRACK_TO_AIRCRAFT_MILES = 2.5;
@@ -180,7 +188,7 @@ const MAX_POSITION_JITTER_DEADBAND_MILES = 0.12;
 // In steady-state linear motion with poll interval P, the icon's lag behind
 // the *latest reported position* settles at
 //   L* = P × τ_avg / (1 - exp(-P/τ))
-// which for our P ≈ 4s polls gives ~8 s of icon-lag at τ = 6 s. The cap
+// which for our P ≈ 4s polls gives ~10 s of icon-lag at τ = 8 s. The cap
 // timestamp uses the same τ so trail and icon move in lockstep — that's
 // the invariant that prevents the trail from leading the dot.
 //
@@ -1100,9 +1108,10 @@ function getSanitizedTrackCoordinates(
 }
 
 function hashTrackSegments(segments: TrackSegment[]) {
-  // Why: shape + per-segment head/tail fingerprint. Sufficient for our
-  // dedup case — if any earlier coord changes, segment length differs and
-  // the hash flips.
+  // Why: shape + per-segment head/tail/midpoint fingerprint. The midpoint
+  // sample makes a false-collision astronomically rare — two trails with
+  // identical heads, tails, and length would also need the same midpoint
+  // coordinate to dedup to "no change."
   if (segments.length === 0) {
     return "0";
   }
@@ -1111,7 +1120,8 @@ function hashTrackSegments(segments: TrackSegment[]) {
       if (coords.length === 0) return "e";
       const head = coords[0]!;
       const tail = coords[coords.length - 1]!;
-      return `${coords.length}|${head[0]},${head[1]}|${tail[0]},${tail[1]}`;
+      const mid = coords[Math.floor(coords.length / 2)]!;
+      return `${coords.length}|${head[0]},${head[1]}|${mid[0]},${mid[1]}|${tail[0]},${tail[1]}`;
     })
     .join("/");
 }
@@ -2685,6 +2695,11 @@ export function FlightMap() {
           if (!buffer) {
             buffer = { points: [], lastSeenAt: wallNow };
             flightBreadcrumbsRef.current.set(flight.id, buffer);
+          } else if (wallNow - buffer.lastSeenAt > BREADCRUMB_LEG_BREAK_GAP_MS) {
+            // Gap > 15 min — almost certainly a landing → ramp →
+            // takeoff sequence. Wipe the previous leg's breadcrumbs so
+            // we don't paint a connecting line across legs.
+            buffer.points = [];
           }
           buffer.points.push({
             coordinate: [flight.longitude, flight.latitude],

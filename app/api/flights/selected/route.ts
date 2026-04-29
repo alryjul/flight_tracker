@@ -7,6 +7,7 @@ import {
 import { fetchAdsbdbSelectedMetadata } from "@/lib/flights/adsbdb";
 import { fetchAdsbLolSelectedFlightTrack } from "@/lib/flights/adsblol";
 import { fetchOpenSkySelectedFlightTrack } from "@/lib/flights/openskyTrack";
+import { hasCommercialFlightIdentity } from "@/lib/flights/scoring";
 import { inferOriginFromTrack } from "@/lib/flights/trackInference";
 import type { Flight } from "@/lib/flights/types";
 
@@ -14,15 +15,6 @@ export const revalidate = 0;
 
 function normalizedUpper(value: string | null | undefined) {
   return value?.trim().toUpperCase() ?? null;
-}
-
-function hasCommercialFlightIdentity(flight: Flight) {
-  if (flight.flightNumber) {
-    return true;
-  }
-
-  const callsign = flight.callsign.trim().toUpperCase();
-  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
 }
 
 function primeFeedMetadataFromTrustedAeroApiDetails(

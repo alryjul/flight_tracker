@@ -1,3 +1,4 @@
+import { isCommercialCallsignString } from "@/lib/flights/scoring";
 import type { Flight } from "@/lib/flights/types";
 
 const ADSBDB_BASE_URL = "https://api.adsbdb.com/v0";
@@ -305,9 +306,7 @@ function getCombinedCacheKey(icao24: string, callsign: string) {
 }
 
 function looksLikeCommercialFlight(flight: Flight) {
-  const callsign = flight.callsign.trim().toUpperCase();
-
-  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
+  return isCommercialCallsignString(flight.callsign);
 }
 
 async function fetchCombinedMetadata(icao24: string, callsign: string) {

@@ -54,10 +54,10 @@ function getCached(key: string) {
 }
 
 function setCached(key: string, value: string | null) {
-  if (
-    !reverseGeocodeCache.has(key) &&
-    reverseGeocodeCache.size >= REVERSE_GEOCODE_CACHE_MAX_ENTRIES
-  ) {
+  // Why: delete-then-set bubbles the entry to "most recent" in insertion
+  // order, so frequently-re-set entries don't accidentally evict.
+  reverseGeocodeCache.delete(key);
+  if (reverseGeocodeCache.size >= REVERSE_GEOCODE_CACHE_MAX_ENTRIES) {
     const oldest = reverseGeocodeCache.keys().next().value;
     if (oldest !== undefined) {
       reverseGeocodeCache.delete(oldest);
