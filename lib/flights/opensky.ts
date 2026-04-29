@@ -1,6 +1,9 @@
 import { APP_CONFIG } from "@/lib/config";
 import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
-import { enrichFlightsWithAeroApiMetadata } from "@/lib/flights/aeroapi";
+import {
+  enrichFlightsWithAeroApiMetadata,
+  isStationaryOnGroundFlight
+} from "@/lib/flights/aeroapi";
 import {
   distanceBetweenPointsMiles,
   isWithinBoundingBox,
@@ -176,6 +179,10 @@ export async function fetchOpenSkyFlights(
       };
     })
     .filter((flight): flight is Flight => flight != null)
+    // Why: drop parked / barely-moving aircraft at the source so the
+    // strip and viewport aren't crowded by stationary aircraft at
+    // airports. Matches adsb.lol's discovery filter for parity.
+    .filter((flight) => !isStationaryOnGroundFlight(flight))
     .sort((left, right) => getDiscoveryScore(left, area) - getDiscoveryScore(right, area))
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 

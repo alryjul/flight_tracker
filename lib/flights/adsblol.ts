@@ -1,5 +1,8 @@
 import type { SelectedFlightTrackPoint } from "@/lib/flights/aeroapi";
-import { enrichFlightsWithAeroApiMetadata } from "@/lib/flights/aeroapi";
+import {
+  enrichFlightsWithAeroApiMetadata,
+  isStationaryOnGroundFlight
+} from "@/lib/flights/aeroapi";
 import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
 import type { FlightArea } from "@/lib/flights/opensky";
 import type { Flight } from "@/lib/flights/types";
@@ -349,6 +352,12 @@ export async function fetchAdsbLolFlights(
     })
     .map((aircraft) => adsbLolAircraftToFlight(aircraft, responseNowMs))
     .filter((flight): flight is Flight => flight != null)
+    // Why: drop parked / barely-moving aircraft at the source. With
+    // adsb.lol's much denser feed (esp. at major airports like LAX),
+    // dozens of stationary aircraft would otherwise crowd the strip
+    // and the map. Aircraft taxiing > 35 kt or rolling out from a
+    // landing remain in the feed.
+    .filter((flight) => !isStationaryOnGroundFlight(flight))
     .sort((left, right) => getDiscoveryScore(left, area) - getDiscoveryScore(right, area))
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 

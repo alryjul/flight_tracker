@@ -663,7 +663,12 @@ function isCommercialFlight(flight: Flight) {
   return callsign != null && /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
 }
 
-function isStationaryOnGroundFlight(flight: Flight) {
+// Why: exported so discovery providers can filter out parked/long-stopped
+// aircraft at the source. Threshold: on the ground + below 35 kt + below
+// 250 ft = aircraft that has either just parked or is barely moving. Active
+// taxi/takeoff/landing rollouts blow past 35 kt; a hovering helicopter
+// reports onGround=false so it stays in the feed.
+export function isStationaryOnGroundFlight(flight: Flight) {
   if (!flight.onGround) {
     return false;
   }
