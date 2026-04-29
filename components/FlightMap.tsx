@@ -151,14 +151,29 @@ const VISIBLE_FLIGHT_LINGER_MS = 1000 * 60;
 // flights from oscillating in/out of the visible set on noise.
 const RANKING_MAGIC_ZONE_MILES = 8;
 const RANKING_GA_HORIZON_MILES = 12;
-const RANKING_COMMERCIAL_HORIZON_MILES = 25;
-const RANKING_COMMERCIAL_BONUS_MILES = 8;
+// Why: extended from 25 → 35 so KLAX arrivals from the east/north — which
+// pass over the WeHo viewport at altitude while still 20-30 mi out — get a
+// chance to show up before they're on final. The hard horizon still
+// excludes long-range overflights, just gives more lead time.
+const RANKING_COMMERCIAL_HORIZON_MILES = 35;
+// Why: commercial bonus bumped 8 → 12 so the "writ large" preference for
+// commercial traffic actually wins over the volume of low-altitude GA
+// pattern work at SMO/VNY. With −12 mi a cruise heavy overhead at 12 mi
+// (score 0) beats an SMO Cessna in the pattern at 9 mi (score 3).
+const RANKING_COMMERCIAL_BONUS_MILES = 12;
 const RANKING_LOW_ALTITUDE_BONUS_MILES = 6;
 const RANKING_LOW_ALTITUDE_FEET = 3000;
-const RANKING_HIGH_CRUISE_PENALTY_MILES = 3;
+// Why: cruise penalty removed. A cruise commercial overhead is still
+// interesting — it's commercial, it's overhead, the user wanted these to
+// surface. Penalizing them for altitude just gave SMO GA an unwarranted
+// edge.
+const RANKING_HIGH_CRUISE_PENALTY_MILES = 0;
 const RANKING_HIGH_CRUISE_FEET = 30000;
 const RANKING_GROUND_PENALTY_MILES = 25;
-const RANKING_COMMERCIAL_GROUND_PENALTY_MILES = 8;
+// Why: commercial-on-ground penalty halved 8 → 4 so a taxi heavy at LAX
+// rides at the same level as SMO patterns instead of well below them. A
+// 747 holding short at LAX is a worthwhile thing to surface.
+const RANKING_COMMERCIAL_GROUND_PENALTY_MILES = 4;
 const RANKING_HARD_BURY_OFFSET = 100;
 const RANKING_SOFT_BURY_OFFSET = 50;
 const RANKING_MAGIC_ZONE_OFFSET = 100;
