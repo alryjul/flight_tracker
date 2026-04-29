@@ -1,3 +1,4 @@
+import { hasCommercialFlightIdentity } from "@/lib/flights/scoring";
 import type { Flight } from "@/lib/flights/types";
 
 // Why: turn squawk codes into something meaningful for both UI labels
@@ -24,5 +25,25 @@ export function isOperatingVfr(flight: Pick<Flight, "squawk">) {
   if (!squawk) return false;
   if (squawk === "1200") return true;
   if (/^02[0-7][0-7]$/.test(squawk)) return true;
+  return false;
+}
+
+// Why: a stricter "should we even bother calling AeroAPI for this flight?"
+// gate that's a strict superset of isOperatingVfr. Includes:
+//   • Definitive VFR (1200 / SoCal range) — known no plan
+//   • Null/missing squawk + GA-pattern callsign — likely VFR Cessna or
+//     small helo not currently transmitting a squawk. Investigation
+//     showed these are mostly pattern-work GA where AeroAPI returns
+//     either nothing or just the same origin we'd already infer from
+//     the track. Skipping saves real per-minute quota.
+//
+// Distinct from isOperatingVfr because the UI label needs the *strict*
+// "I know this is VFR" signal — we don't want to display "VFR" on a
+// flight whose only signal is "no squawk yet." This predicate is the
+// looser quota-conservation gate, not a UI assertion.
+export function isUnlikelyToHaveAeroApiData(flight: Flight) {
+  if (isOperatingVfr(flight)) return true;
+  const squawk = flight.squawk?.trim();
+  if (!squawk && !hasCommercialFlightIdentity(flight)) return true;
   return false;
 }
