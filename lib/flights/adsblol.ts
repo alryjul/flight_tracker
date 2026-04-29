@@ -1,4 +1,9 @@
 import type { SelectedFlightTrackPoint } from "@/lib/flights/aeroapi";
+import { enrichFlightsWithAeroApiMetadata } from "@/lib/flights/aeroapi";
+import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
+import type { FlightArea } from "@/lib/flights/opensky";
+import type { Flight } from "@/lib/flights/types";
+import { distanceBetweenPointsMiles } from "@/lib/geo";
 
 // Why: adsb.lol exposes a community-fed ADS-B trace at
 // `https://globe.adsb.lol/data/traces/<bucket>/trace_recent_<icao>.json`,
@@ -163,4 +168,191 @@ export async function fetchAdsbLolSelectedFlightTrack(icao24: string): Promise<S
   } finally {
     traceRequests.delete(normalized);
   }
+}
+
+// ---------------------------------------------------------------------
+// Bounding-box discovery
+// ---------------------------------------------------------------------
+
+const ADSBLOL_AREA_BASE = "https://api.adsb.lol/v2/lat";
+const ADSBLOL_DISCOVERY_TIMEOUT_MS = 6000;
+const ADSBLOL_DISCOVERY_FRESH_MAX_SEC = 60;
+// Why: adsb.lol's API expresses radius in nautical miles. Our app config
+// (and OpenSky parity) uses statute miles, so convert at the boundary.
+const STATUTE_MILES_PER_NAUTICAL_MILE = 1.15077945;
+const DISCOVERY_FLIGHT_CANDIDATE_LIMIT = 80;
+
+type AdsbLolAreaAircraft = {
+  hex: string;
+  flight?: string | null;
+  r?: string | null;
+  t?: string | null;
+  desc?: string | null;
+  ownOp?: string | null;
+  lat?: number;
+  lon?: number;
+  alt_baro?: number | "ground" | null;
+  alt_geom?: number | null;
+  gs?: number | null;
+  track?: number | null;
+  true_heading?: number | null;
+  squawk?: string | null;
+  seen?: number | null;
+  seen_pos?: number | null;
+};
+
+type AdsbLolAreaResponse = {
+  ac?: AdsbLolAreaAircraft[];
+  now?: number;
+  total?: number;
+};
+
+function normalizeCallsign(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "Unknown";
+}
+
+function adsbLolAircraftToFlight(
+  aircraft: AdsbLolAreaAircraft,
+  responseNowMs: number
+): Flight | null {
+  if (
+    !aircraft.hex ||
+    typeof aircraft.lat !== "number" ||
+    typeof aircraft.lon !== "number" ||
+    !Number.isFinite(aircraft.lat) ||
+    !Number.isFinite(aircraft.lon)
+  ) {
+    return null;
+  }
+
+  const onGround = aircraft.alt_baro === "ground";
+  const altitudeFeet =
+    typeof aircraft.alt_baro === "number" && Number.isFinite(aircraft.alt_baro)
+      ? aircraft.alt_baro
+      : typeof aircraft.alt_geom === "number" && Number.isFinite(aircraft.alt_geom)
+        ? aircraft.alt_geom
+        : null;
+
+  const positionTimestampSec =
+    typeof aircraft.seen_pos === "number" && Number.isFinite(aircraft.seen_pos)
+      ? Math.round((responseNowMs - aircraft.seen_pos * 1000) / 1000)
+      : null;
+  const lastContactTimestampSec =
+    typeof aircraft.seen === "number" && Number.isFinite(aircraft.seen)
+      ? Math.round((responseNowMs - aircraft.seen * 1000) / 1000)
+      : positionTimestampSec;
+
+  return {
+    id: aircraft.hex.trim().toLowerCase(),
+    latitude: aircraft.lat,
+    longitude: aircraft.lon,
+    callsign: normalizeCallsign(aircraft.flight),
+    onGround: onGround ? true : altitudeFeet == null ? null : false,
+    flightNumber: null,
+    airline: null,
+    aircraftType: aircraft.t?.trim() || null,
+    origin: null,
+    destination: null,
+    altitudeFeet,
+    groundspeedKnots:
+      typeof aircraft.gs === "number" && Number.isFinite(aircraft.gs)
+        ? Math.round(aircraft.gs)
+        : null,
+    headingDegrees:
+      typeof aircraft.track === "number" && Number.isFinite(aircraft.track)
+        ? aircraft.track
+        : typeof aircraft.true_heading === "number" && Number.isFinite(aircraft.true_heading)
+          ? aircraft.true_heading
+          : null,
+    positionTimestampSec,
+    lastContactTimestampSec,
+    registration: aircraft.r?.trim() || null,
+    // Why: `ownOp` from adsb.lol is the registered operator (e.g.,
+    // "LAPD AIR SUPPORT DIVISION") — equivalent to ADSBdb's
+    // registered_owner. Use it directly to skip an ADSBdb hit.
+    registeredOwner: aircraft.ownOp?.trim() || null
+  };
+}
+
+function isCommercialIdentity(flight: Flight) {
+  const callsign = flight.callsign.trim().toUpperCase();
+  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
+}
+
+function getDiscoveryScore(flight: Flight, area: FlightArea) {
+  let score = distanceBetweenPointsMiles({
+    fromLatitude: area.center.latitude,
+    fromLongitude: area.center.longitude,
+    toLatitude: flight.latitude,
+    toLongitude: flight.longitude
+  });
+
+  if (flight.onGround) {
+    score += isCommercialIdentity(flight) ? 6 : 16;
+  }
+
+  if (flight.altitudeFeet != null && flight.altitudeFeet < 1500 && !flight.onGround) {
+    score -= 1.5;
+  }
+
+  if (flight.groundspeedKnots != null && flight.groundspeedKnots > 180) {
+    score -= 0.5;
+  }
+
+  if (isCommercialIdentity(flight)) {
+    score -= 0.75;
+  }
+
+  return score;
+}
+
+export async function fetchAdsbLolFlights(
+  area: FlightArea,
+  options?: { warmAeroApiFeed?: boolean }
+): Promise<Flight[]> {
+  const radiusNm = Math.max(1, Math.round(area.radiusMiles / STATUTE_MILES_PER_NAUTICAL_MILE));
+  const url = `${ADSBLOL_AREA_BASE}/${area.center.latitude}/lon/${area.center.longitude}/dist/${radiusNm}`;
+
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), ADSBLOL_DISCOVERY_TIMEOUT_MS);
+
+  let data: AdsbLolAreaResponse;
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: { "User-Agent": "flight-tracker/0.1 (+ambient airspace)" },
+      signal: abortController.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`adsb.lol discovery failed with status ${response.status}`);
+    }
+
+    data = (await response.json()) as AdsbLolAreaResponse;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const responseNowMs =
+    typeof data.now === "number" && Number.isFinite(data.now) ? data.now : Date.now();
+
+  const flights = (data.ac ?? [])
+    .filter((aircraft) => {
+      // Why: adsb.lol's response can include aircraft that haven't
+      // reported a position recently. Treat anything older than a
+      // minute as stale to keep the live feed clean.
+      if (typeof aircraft.seen_pos === "number" && aircraft.seen_pos > ADSBLOL_DISCOVERY_FRESH_MAX_SEC) {
+        return false;
+      }
+      return true;
+    })
+    .map((aircraft) => adsbLolAircraftToFlight(aircraft, responseNowMs))
+    .filter((flight): flight is Flight => flight != null)
+    .sort((left, right) => getDiscoveryScore(left, area) - getDiscoveryScore(right, area))
+    .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
+
+  return enrichFlightsWithAeroApiMetadata(enrichFlightsWithAdsbdbFallback(flights), {
+    warm: options?.warmAeroApiFeed ?? true
+  });
 }

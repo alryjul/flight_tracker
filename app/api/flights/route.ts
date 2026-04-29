@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APP_CONFIG } from "@/lib/config";
+import { fetchAdsbLolFlights } from "@/lib/flights/adsblol";
 import { buildMockFlights } from "@/lib/flights/mock";
 import {
   fetchAeroApiDiscoveryFlights,
@@ -13,6 +14,10 @@ export const revalidate = 0;
 
 const STALE_FEED_TTL_MS = 1000 * 60 * 3;
 const AEROAPI_DISCOVERY_COOLDOWN_MS = 1000 * 60 * 3;
+// Why: adsb.lol is community-fed and occasionally has hiccups. When a
+// discovery attempt fails, back off for 30s before retrying so we don't
+// hammer them — and so the OpenSky fallback gets a chance to serve.
+const ADSBLOL_DISCOVERY_COOLDOWN_MS = 1000 * 30;
 const MAX_RADIUS_MILES = 250;
 const FRESH_CACHE_HEADER = "private, max-age=2, stale-while-revalidate=30";
 const STALE_CACHE_HEADER = "private, max-age=0, stale-while-revalidate=30";
@@ -28,6 +33,7 @@ type CachedFeed = {
 
 const feedCache = new Map<string, CachedFeed>();
 let aeroApiDiscoveryCooldownUntil = 0;
+let adsbLolDiscoveryCooldownUntil = 0;
 
 function setCachedFeed(key: string, value: CachedFeed) {
   if (!feedCache.has(key) && feedCache.size >= FEED_CACHE_MAX_ENTRIES) {
@@ -39,16 +45,24 @@ function setCachedFeed(key: string, value: CachedFeed) {
   feedCache.set(key, value);
 }
 
-function getDiscoveryProviderPreference() {
+// Why: default cascade is adsb.lol -> opensky -> mock. adsb.lol gives us
+// the best GA coverage and richer fields (registration, type, owner)
+// without an API key or quota. OpenSky is the institutional fallback for
+// the rare case adsb.lol is down or has missed an aircraft. Explicit
+// provider env values force a single source for testing/debug.
+type DiscoveryProvider = "auto" | "adsblol" | "opensky" | "aeroapi";
+
+function getDiscoveryProviderPreference(): DiscoveryProvider {
   const provider = process.env.FLIGHT_DISCOVERY_PROVIDER?.trim().toLowerCase();
 
   switch (provider) {
     case "aeroapi":
     case "opensky":
+    case "adsblol":
     case "auto":
       return provider;
     default:
-      return "opensky";
+      return "auto";
   }
 }
 
@@ -158,61 +172,89 @@ export async function GET(request: NextRequest) {
   const discoveryProviderPreference = getDiscoveryProviderPreference();
   const canUseAeroApiDiscovery = hasAeroApiDiscoveryCredentials();
   const canUseOpenSky = hasOpenSkyCredentials();
-  const useMockData = !canUseOpenSky && !canUseAeroApiDiscovery;
-  const shouldTryAeroApiDiscovery =
-    Date.now() >= aeroApiDiscoveryCooldownUntil &&
-    discoveryProviderPreference === "aeroapi";
 
-  if (shouldTryAeroApiDiscovery && canUseAeroApiDiscovery) {
-    try {
-      const flights = await fetchAeroApiDiscoveryFlights(area);
-      setCachedFeed(getAreaCacheKey(area), {
-        fetchedAt: Date.now(),
-        flights
-      });
-
-      return jsonResponse(
-        {
-          source: "aeroapi-discovery",
-          center: area.center,
-          radiusMiles: area.radiusMiles,
-          flights
-        },
-        { cacheControl: FRESH_CACHE_HEADER }
-      );
-    } catch (error) {
-      aeroApiDiscoveryCooldownUntil = Date.now() + AEROAPI_DISCOVERY_COOLDOWN_MS;
-      console.error("Failed to load AeroAPI discovery flights", error);
-
-      if (discoveryProviderPreference === "aeroapi") {
-        const cachedFlights = getCachedFeed(area);
-
-        if (cachedFlights) {
-          return jsonResponse(
-            {
-              source: "aeroapi-stale",
-              center: area.center,
-              radiusMiles: area.radiusMiles,
-              flights: cachedFlights
-            },
-            { cacheControl: STALE_CACHE_HEADER }
-          );
-        }
-
+  // Force-only paths for explicit overrides via FLIGHT_DISCOVERY_PROVIDER.
+  // Default ("auto") falls into the cascade further down.
+  if (discoveryProviderPreference === "aeroapi") {
+    if (Date.now() >= aeroApiDiscoveryCooldownUntil && canUseAeroApiDiscovery) {
+      try {
+        const flights = await fetchAeroApiDiscoveryFlights(area);
+        setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
         return jsonResponse(
-          {
-            source: "aeroapi-unavailable",
-            center: area.center,
-            radiusMiles: area.radiusMiles,
-            flights: []
-          },
+          { source: "aeroapi-discovery", center: area.center, radiusMiles: area.radiusMiles, flights },
+          { cacheControl: FRESH_CACHE_HEADER }
+        );
+      } catch (error) {
+        aeroApiDiscoveryCooldownUntil = Date.now() + AEROAPI_DISCOVERY_COOLDOWN_MS;
+        console.error("Failed to load AeroAPI discovery flights", error);
+      }
+    }
+    const cachedFlights = getCachedFeed(area);
+    return cachedFlights
+      ? jsonResponse(
+          { source: "aeroapi-stale", center: area.center, radiusMiles: area.radiusMiles, flights: cachedFlights },
+          { cacheControl: STALE_CACHE_HEADER }
+        )
+      : jsonResponse(
+          { source: "aeroapi-unavailable", center: area.center, radiusMiles: area.radiusMiles, flights: [] },
           { status: 503, cacheControl: ERROR_CACHE_HEADER }
         );
+  }
+
+  // Cascade: adsb.lol -> opensky -> mock. Each provider's failure mode
+  // falls through to the next; cached responses bridge transient outages.
+  const tryAdsbLol =
+    discoveryProviderPreference === "adsblol" || discoveryProviderPreference === "auto";
+  const tryOpenSky =
+    discoveryProviderPreference === "opensky" || discoveryProviderPreference === "auto";
+
+  if (tryAdsbLol && Date.now() >= adsbLolDiscoveryCooldownUntil) {
+    try {
+      const flights = await fetchAdsbLolFlights(area, { warmAeroApiFeed: warmFeedMetadata });
+      if (flights.length > 0) {
+        setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
+        return jsonResponse(
+          { source: "adsblol", center: area.center, radiusMiles: area.radiusMiles, flights },
+          { cacheControl: FRESH_CACHE_HEADER }
+        );
       }
+      // Empty result is suspicious — let OpenSky have a chance instead of
+      // returning zero flights to the client.
+      console.warn("adsb.lol returned no flights for area; falling back");
+    } catch (error) {
+      adsbLolDiscoveryCooldownUntil = Date.now() + ADSBLOL_DISCOVERY_COOLDOWN_MS;
+      console.error("Failed to load adsb.lol discovery flights", error);
     }
   }
 
-  if (useMockData) {
+  if (tryOpenSky && canUseOpenSky) {
+    try {
+      const flights = await fetchOpenSkyFlights(area, { warmAeroApiFeed: warmFeedMetadata });
+      setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
+      return jsonResponse(
+        { source: "opensky", center: area.center, radiusMiles: area.radiusMiles, flights },
+        { cacheControl: FRESH_CACHE_HEADER }
+      );
+    } catch (error) {
+      console.error("Failed to load OpenSky flights", error);
+    }
+  }
+
+  // All live providers exhausted — try a stale cache before mock/empty.
+  const cachedFlights = getCachedFeed(area);
+  if (cachedFlights) {
+    return jsonResponse(
+      {
+        source: tryAdsbLol ? "adsblol-stale" : "opensky-stale",
+        center: area.center,
+        radiusMiles: area.radiusMiles,
+        flights: cachedFlights
+      },
+      { cacheControl: STALE_CACHE_HEADER }
+    );
+  }
+
+  if (!canUseOpenSky && !canUseAeroApiDiscovery) {
     return jsonResponse(
       {
         source: "mock",
@@ -224,49 +266,13 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  try {
-    const flights = await fetchOpenSkyFlights(area, {
-      warmAeroApiFeed: warmFeedMetadata
-    });
-    setCachedFeed(getAreaCacheKey(area), {
-      fetchedAt: Date.now(),
-      flights
-    });
-
-    return jsonResponse(
-      {
-        source: "opensky",
-        center: area.center,
-        radiusMiles: area.radiusMiles,
-        flights
-      },
-      { cacheControl: FRESH_CACHE_HEADER }
-    );
-  } catch (error) {
-    console.error("Failed to load OpenSky flights", error);
-
-    const cachedFlights = getCachedFeed(area);
-
-    if (cachedFlights) {
-      return jsonResponse(
-        {
-          source: "opensky-stale",
-          center: area.center,
-          radiusMiles: area.radiusMiles,
-          flights: cachedFlights
-        },
-        { cacheControl: STALE_CACHE_HEADER }
-      );
-    }
-
-    return jsonResponse(
-      {
-        source: "opensky-unavailable",
-        center: area.center,
-        radiusMiles: area.radiusMiles,
-        flights: []
-      },
-      { status: 503, cacheControl: ERROR_CACHE_HEADER }
-    );
-  }
+  return jsonResponse(
+    {
+      source: tryAdsbLol ? "adsblol-unavailable" : "opensky-unavailable",
+      center: area.center,
+      radiusMiles: area.radiusMiles,
+      flights: []
+    },
+    { status: 503, cacheControl: ERROR_CACHE_HEADER }
+  );
 }

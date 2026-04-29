@@ -2427,9 +2427,11 @@ export function FlightMap() {
       const isFallbackSnapshot =
         data.source === "opensky-stale" ||
         data.source === "aeroapi-stale" ||
+        data.source === "adsblol-stale" ||
         data.source === "mock-fallback" ||
         data.source === "opensky-unavailable" ||
-        data.source === "aeroapi-unavailable";
+        data.source === "aeroapi-unavailable" ||
+        data.source === "adsblol-unavailable";
 
       const sortedFlights = [...data.flights].sort(
         (left, right) =>
