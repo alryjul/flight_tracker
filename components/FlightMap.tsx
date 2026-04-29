@@ -1777,52 +1777,6 @@ export function FlightMap() {
   const hoveredFlightIdRef = useRef<string | null>(null);
   const hoveredStripFlightIdRef = useRef<string | null>(null);
   const hoveredStripStartedAtRef = useRef<number | null>(null);
-  // DIAGNOSTIC: detect render storms. If FlightMap renders > 50 times in
-  // 1s, the loop is happening. Logged with debug.error to surface in the
-  // user's console along with the React max-update-depth warning.
-  const renderCountRef = useRef(0);
-  const lastRenderResetRef = useRef(0);
-  if (typeof performance !== "undefined") {
-    const now = performance.now();
-    if (lastRenderResetRef.current === 0) lastRenderResetRef.current = now;
-    renderCountRef.current += 1;
-    const elapsed = now - lastRenderResetRef.current;
-    if (elapsed >= 1000) {
-      if (renderCountRef.current > 50) {
-        console.error(
-          `[render-storm] FlightMap rendered ${renderCountRef.current} times in ${elapsed.toFixed(0)}ms — loop in progress`
-        );
-      }
-      renderCountRef.current = 0;
-      lastRenderResetRef.current = now;
-    }
-  }
-  // DIAGNOSTIC: count setState calls per setter. When a setter is called
-  // more than 30 times in a 1s window, log it — that's the loop source.
-  const setStateStatsRef = useRef<{ counts: Record<string, number>; resetAt: number }>({
-    counts: {},
-    resetAt: 0
-  });
-  const tagSetState = (label: string) => {
-    if (typeof performance === "undefined") return;
-    const now = performance.now();
-    const stats = setStateStatsRef.current;
-    if (stats.resetAt === 0) stats.resetAt = now;
-    stats.counts[label] = (stats.counts[label] ?? 0) + 1;
-    if (now - stats.resetAt >= 1000) {
-      const noisy = Object.entries(stats.counts)
-        .filter(([, n]) => n >= 30)
-        .sort((a, b) => b[1] - a[1]);
-      if (noisy.length > 0) {
-        console.error(
-          `[setState-storm] last 1s: ${noisy.map(([k, n]) => `${k}=${n}`).join(", ")}`
-        );
-      }
-      stats.counts = {};
-      stats.resetAt = now;
-    }
-  };
-
   const [homeBase, setHomeBase] = useState<HomeBaseCenter>(APP_CONFIG.center);
   const [radiusMiles, setRadiusMiles] = useState<number>(APP_CONFIG.radiusMiles);
   const [areaFlyoutOpen, setAreaFlyoutOpen] = useState(false);
@@ -1908,19 +1862,16 @@ export function FlightMap() {
     if (invalidatedFlightIds.length > 0) {
       const changedFlightIdSet = new Set(invalidatedFlightIds);
 
-      tagSetState("identityInvalidate.setFeedMetadataById");
       setFeedMetadataById((currentMetadata) =>
         Object.fromEntries(
           Object.entries(currentMetadata).filter(([flightId]) => !changedFlightIdSet.has(flightId))
         )
       );
-      tagSetState("identityInvalidate.setSelectedMetadataById");
       setSelectedMetadataById((currentMetadata) =>
         Object.fromEntries(
           Object.entries(currentMetadata).filter(([flightId]) => !changedFlightIdSet.has(flightId))
         )
       );
-      tagSetState("identityInvalidate.setRememberedMetadataById");
       setRememberedMetadataById((currentMetadata) =>
         Object.fromEntries(
           Object.entries(currentMetadata).filter(([flightId]) => !changedFlightIdSet.has(flightId))
@@ -1952,7 +1903,10 @@ export function FlightMap() {
     if (latestIds.length === 0) {
       visibleFlightIdsRef.current = [];
       visibleFlightLingerUntilRef.current = new Map();
-      setVisibleFlightIds([]);
+      // Bail-stable empty: same-ref return prevents downstream memos
+      // (visibleFlights, displayFlights, etc.) from re-computing on a
+      // fresh empty array reference each call.
+      setVisibleFlightIds((current) => (current.length === 0 ? current : []));
       return;
     }
 
@@ -2017,7 +1971,6 @@ export function FlightMap() {
     visibleFlightLingerUntilRef.current = nextLingerUntil;
 
     if (!arraysMatch(previousVisibleIds, nextVisibleIds)) {
-      tagSetState("visibility.setVisibleFlightIds");
       setVisibleFlightIds(nextVisibleIds);
     }
   }, [flights, homeBase, selectedFlightId]);
@@ -2521,7 +2474,6 @@ export function FlightMap() {
       const stabilizedFlights = stabilizeFlightsForJitter(sortedFlights, currentFlights);
       const capturedAt = performance.now();
 
-      tagSetState("polling.setFlights");
       setFlights((currentFlights) => {
         if (isFallbackSnapshot && currentFlights.length > 0) {
           return currentFlights;
@@ -2529,14 +2481,12 @@ export function FlightMap() {
 
         return stabilizedFlights;
       });
-      tagSetState("polling.setDataSource");
       setDataSource((currentSource) =>
         (data.source === "mock-fallback" || data.source === "opensky-unavailable") &&
         (currentSource === "opensky" || currentSource === "opensky-stale")
           ? currentSource
           : data.source
       );
-      tagSetState("polling.setSelectedFlightId");
       setSelectedFlightId((currentId) => {
         if (currentId && sortedFlights.some((flight) => flight.id === currentId)) {
           return currentId;
@@ -2885,7 +2835,6 @@ export function FlightMap() {
       return;
     }
 
-    tagSetState("feedMeta.setFeedMetadataById");
     setFeedMetadataById((currentMetadata) => {
       const currentFlightMetadata =
         getIdentityScopedValue(currentMetadata[selectedFlightBase.id], selectedFlightBase);
@@ -2938,8 +2887,11 @@ export function FlightMap() {
     if (latestOrder.length === 0) {
       stableFlightOrderRef.current = [];
       previousVisibilityScoreSnapshotRef.current = new Map();
-      tagSetState("stableOrder.empty");
-      setStableFlightOrder([]);
+      // Why: pass an updater that returns the same reference when state
+      // is already empty. Without this guard, every call ships a NEW
+      // empty array, React detects a state change, the effect re-fires
+      // (stableFlightOrder is a dep), and we loop forever.
+      setStableFlightOrder((current) => (current.length === 0 ? current : []));
       return;
     }
 
@@ -2949,8 +2901,7 @@ export function FlightMap() {
       stableFlightOrderRef.current = latestOrder;
       previousVisibilityScoreSnapshotRef.current = latestVisibilityScoreSnapshot;
       lastStripReorderAtRef.current = Date.now();
-      tagSetState("stableOrder.reset");
-      setStableFlightOrder(latestOrder);
+      setStableFlightOrder((current) => (arraysMatch(current, latestOrder) ? current : latestOrder));
       return;
     }
 
@@ -3002,8 +2953,7 @@ export function FlightMap() {
     previousVisibilityScoreSnapshotRef.current = latestVisibilityScoreSnapshot;
 
     if (!arraysMatch(stableFlightOrderRef.current, stableFlightOrder)) {
-      tagSetState("stableOrder.next");
-      setStableFlightOrder(nextOrder);
+      setStableFlightOrder((current) => (arraysMatch(current, nextOrder) ? current : nextOrder));
     }
   }, [homeBase, selectedFlightId, stableFlightOrder, visibleFlights]);
 
