@@ -896,7 +896,13 @@ function setSelectedTrackSourceData(
   track: SelectedFlightDetailsResponse["details"] | null,
   breadcrumbPoints: BreadcrumbPoint[],
   renderedPosition: { latitude: number; longitude: number } | null,
-  displayedProviderTimestampMs: number | null
+  displayedProviderTimestampMs: number | null,
+  // Why: when this is `false` we refuse to wipe the source mid-selection.
+  // The trail then persists across the gap between click and fetch-return,
+  // so the user never sees the trail "flash and disappear" before the
+  // robust AeroAPI track lands. Callers pass `true` only when the
+  // selection is intentionally being cleared.
+  allowEmpty = false
 ) {
   if (!source) {
     return;
@@ -908,6 +914,10 @@ function setSelectedTrackSourceData(
     renderedPosition,
     displayedProviderTimestampMs
   );
+
+  if (coordinates.length < 2 && !allowEmpty) {
+    return;
+  }
 
   const nextHash = hashTrackCoordinates(coordinates);
   if (trackSourceLastHashBySource.get(source) === nextHash) {
@@ -931,6 +941,12 @@ function setSelectedTrackSourceData(
           ]
         : []
   });
+}
+
+function clearSelectedTrackSource(source: GeoJSONSource | undefined) {
+  if (!source) return;
+  trackSourceLastHashBySource.set(source, "0");
+  source.setData({ type: "FeatureCollection", features: [] });
 }
 
 function getLastTrackTimestampMs(track: SelectedTrackPoint[]) {
@@ -2950,13 +2966,17 @@ export function FlightMap() {
         })
       });
 
-      setSelectedTrackSourceData(
-        trackSource,
-        activeSelectedTrack,
-        activeBreadcrumbPoints,
-        selectedRenderedPosition,
-        selectedDisplayedProviderTimestampMs
-      );
+      if (selectedId == null) {
+        clearSelectedTrackSource(trackSource);
+      } else {
+        setSelectedTrackSourceData(
+          trackSource,
+          activeSelectedTrack,
+          activeBreadcrumbPoints,
+          selectedRenderedPosition,
+          selectedDisplayedProviderTimestampMs
+        );
+      }
       selectedRenderedPositionRef.current = selectedRenderedPosition;
 
       animationFrameRef.current = requestAnimationFrame(renderFrame);
@@ -2975,6 +2995,12 @@ export function FlightMap() {
   useEffect(() => {
     const source = mapRef.current?.getSource("selected-track") as GeoJSONSource | undefined;
     const selectedId = selectedFlightIdRef.current;
+
+    if (selectedId == null) {
+      clearSelectedTrackSource(source);
+      return;
+    }
+
     // Why: gate on the selection itself, not on whether the flight is in the
     // current poll. A just-clicked flight may not be in `currentFlightsRef`
     // (it could be a remembered/lingering flight, or the latest poll dropped
@@ -2982,12 +3008,9 @@ export function FlightMap() {
     // effect — both used to clear the trail to empty. Trust the cached track
     // for the selected id and let breadcrumbs persist independently.
     const activeSelectedTrack =
-      selectedId != null
-        ? activeSelectedFlightDetails ??
-          (selectedMetadataByIdRef.current[selectedId]?.value ?? null)
-        : null;
-    const selectedAnimationState =
-      selectedId != null ? flightAnimationStatesRef.current.get(selectedId) : undefined;
+      activeSelectedFlightDetails ??
+      (selectedMetadataByIdRef.current[selectedId]?.value ?? null);
+    const selectedAnimationState = flightAnimationStatesRef.current.get(selectedId);
     const selectedDisplayedProviderTimestampMs = getDisplayedProviderTimestampMs(
       selectedAnimationState,
       performance.now()
@@ -2996,13 +3019,11 @@ export function FlightMap() {
     setSelectedTrackSourceData(
       source,
       activeSelectedTrack,
-      selectedId == null
-        ? []
-        : clipBreadcrumbCoordinatesToAnimation(
-            getBreadcrumbPoints(snapshotHistoryRef.current, selectedId),
-            selectedAnimationState,
-            performance.now()
-          ),
+      clipBreadcrumbCoordinatesToAnimation(
+        getBreadcrumbPoints(snapshotHistoryRef.current, selectedId),
+        selectedAnimationState,
+        performance.now()
+      ),
       selectedRenderedPositionRef.current,
       selectedDisplayedProviderTimestampMs
     );
