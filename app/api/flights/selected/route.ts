@@ -121,7 +121,12 @@ export async function GET(request: NextRequest) {
     const aeroApiAvailable = hasAeroApiCredentials();
     const [details, adsbdbMetadata, adsbLolTrack, openSkyTrack] = await Promise.all([
       aeroApiAvailable
-        ? fetchAeroApiSelectedFlightDetails(flight, { bypassCache })
+        // Why: skipTrack avoids the /flights/{faFlightId}/track AeroAPI
+        // call entirely. adsb.lol (with current-leg pruning) and OpenSky
+        // give us comprehensive track data without burning AeroAPI quota.
+        // We still need AeroAPI for metadata (operator name, airline,
+        // route, faFlightId), so the metadata path is unchanged.
+        ? fetchAeroApiSelectedFlightDetails(flight, { bypassCache, skipTrack: true })
         : Promise.resolve(null),
       fetchAdsbdbSelectedMetadata(flight),
       fetchAdsbLolSelectedFlightTrack(flight.id).catch((error) => {

@@ -1005,10 +1005,11 @@ export async function enrichFlightsWithAeroApiMetadata(
 
 export async function fetchAeroApiSelectedFlightDetails(
   flight: Flight,
-  options?: { bypassCache?: boolean }
+  options?: { bypassCache?: boolean; skipTrack?: boolean }
 ): Promise<SelectedFlightDetails | null> {
   const cacheKey = getDetailCacheKey(flight);
   const bypassCache = options?.bypassCache ?? false;
+  const skipTrack = options?.skipTrack ?? false;
   const cached = bypassCache ? undefined : getCachedValue(detailCache, cacheKey);
 
   // Why: serve cached data even during a rate-limit cooldown — we already paid
@@ -1047,6 +1048,12 @@ export async function fetchAeroApiSelectedFlightDetails(
         return null;
       }
 
+      // Why: when skipTrack is set, callers (the selected-flight route)
+      // are getting their track from a richer source like adsb.lol
+      // (community ADS-B, full current-leg pruned) and don't need to
+      // burn an AeroAPI track-fetch quota call here. Saves
+      // /flights/{faFlightId}/track per selection — meaningful given
+      // AeroAPI's tight rate limit on personal tiers.
       const [operatorName, track] = await Promise.all([
         resolveOperatorName(currentBestMatch.operator_iata || currentBestMatch.operator).catch(
           (error) => {
@@ -1058,14 +1065,16 @@ export async function fetchAeroApiSelectedFlightDetails(
             return null;
           }
         ),
-        fetchTrack(currentBestMatch.fa_flight_id).catch((error) => {
-          console.warn("AeroAPI track enrichment failed for selected flight", {
-            flightId: flight.id,
-            callsign: flight.callsign,
-            error
-          });
-          return [];
-        })
+        skipTrack
+          ? Promise.resolve<SelectedFlightTrackPoint[]>([])
+          : fetchTrack(currentBestMatch.fa_flight_id).catch((error) => {
+              console.warn("AeroAPI track enrichment failed for selected flight", {
+                flightId: flight.id,
+                callsign: flight.callsign,
+                error
+              });
+              return [];
+            })
       ]);
       const normalizedOperatorName =
         normalizeOperatorDisplayName(operatorName) ??
