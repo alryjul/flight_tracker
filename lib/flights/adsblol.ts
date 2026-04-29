@@ -528,7 +528,8 @@ function adsbLolAircraftToFlight(
     // Why: `ownOp` from adsb.lol is the registered operator (e.g.,
     // "LAPD AIR SUPPORT DIVISION") — equivalent to ADSBdb's
     // registered_owner. Use it directly to skip an ADSBdb hit.
-    registeredOwner: aircraft.ownOp?.trim() || null
+    registeredOwner: aircraft.ownOp?.trim() || null,
+    squawk: aircraft.squawk?.trim() || null
   };
 }
 

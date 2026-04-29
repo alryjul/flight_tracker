@@ -170,7 +170,8 @@ function normalizeFlight(input: AeroApiDiscoveryFlight): Flight | null {
         ? null
         : Math.round(Date.parse(input.last_position.timestamp) / 1000),
     registration: input.registration ?? null,
-    registeredOwner: input.operator ?? null
+    registeredOwner: input.operator ?? null,
+    squawk: null
   };
 }
 

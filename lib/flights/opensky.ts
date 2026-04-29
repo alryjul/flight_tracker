@@ -138,6 +138,13 @@ export async function fetchOpenSkyFlights(
       const onGround = state[8];
       const velocityMetersPerSecond = state[9];
       const headingDegrees = state[10];
+      // Squawk lives at index 14 in OpenSky's state vector. Stays null if
+      // not transmitted.
+      const squawkRaw = state[14];
+      const squawk =
+        typeof squawkRaw === "string" && squawkRaw.trim().length > 0
+          ? squawkRaw.trim()
+          : null;
 
       if (
         icao24 == null ||
@@ -175,7 +182,8 @@ export async function fetchOpenSkyFlights(
         positionTimestampSec,
         lastContactTimestampSec,
         registration: null,
-        registeredOwner: null
+        registeredOwner: null,
+        squawk
       };
     })
     .filter((flight): flight is Flight => flight != null)

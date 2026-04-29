@@ -501,7 +501,19 @@ function looksLikeAgencyLabel(value: string | null) {
   return /(POLICE|SHERIFF|FIRE|PATROL|AIR SUPPORT|DEPARTMENT)/i.test(value);
 }
 
+// Why: 1200 is the FAA VFR transponder code — "operating under visual
+// flight rules with no flight plan filed." It's the unambiguous signal
+// that no API on Earth has an origin/destination for this flight (because
+// nothing was filed). Surfacing "VFR" instead of "Local flight" tells the
+// user *why* there's no route info, not just that there isn't any.
+function isOperatingVfr(flight: Flight) {
+  return flight.squawk?.trim() === "1200";
+}
+
 function getRouteFallbackLabel(flight: Flight) {
+  if (isOperatingVfr(flight)) {
+    return "VFR";
+  }
   return looksLikeGeneralAviationFlight(flight) ? "Local flight" : "Route pending";
 }
 
@@ -516,7 +528,7 @@ function getStripRouteLabel(flight: Flight) {
     return "Route pending";
   }
 
-  return looksLikeGeneralAviationFlight(flight) ? "Local flight" : getRouteFallbackLabel(flight);
+  return getRouteFallbackLabel(flight);
 }
 
 function getHoverSubtitle(flight: Flight) {
@@ -1826,6 +1838,7 @@ function shouldRetrySelectedFlightEnrichment(
     headingDegrees: null,
     positionTimestampSec: null,
     lastContactTimestampSec: null,
+    squawk: null,
     registration: flightRequest.registration,
     registeredOwner: flightRequest.registeredOwner
   };

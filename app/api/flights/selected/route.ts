@@ -89,7 +89,8 @@ function getFlightFromSearchParams(searchParams: URLSearchParams): Flight | null
     positionTimestampSec: null,
     lastContactTimestampSec: null,
     registration: searchParams.get("registration"),
-    registeredOwner: searchParams.get("registeredOwner")
+    registeredOwner: searchParams.get("registeredOwner"),
+    squawk: searchParams.get("squawk")
   };
 }
 

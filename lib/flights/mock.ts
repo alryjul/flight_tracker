@@ -26,6 +26,7 @@ const mockFlightTemplates: Array<
     headingDegrees: 74,
     positionTimestampSec: null,
     lastContactTimestampSec: null,
+    squawk: null,
     registration: "N123NN",
     registeredOwner: "American Airlines"
   },
@@ -45,6 +46,7 @@ const mockFlightTemplates: Array<
     headingDegrees: 312,
     positionTimestampSec: null,
     lastContactTimestampSec: null,
+    squawk: null,
     registration: "N8674B",
     registeredOwner: "Southwest Airlines"
   },
@@ -64,6 +66,7 @@ const mockFlightTemplates: Array<
     headingDegrees: 262,
     positionTimestampSec: null,
     lastContactTimestampSec: null,
+    squawk: null,
     registration: "N127DU",
     registeredOwner: "Delta Air Lines"
   },
@@ -83,6 +86,7 @@ const mockFlightTemplates: Array<
     headingDegrees: 128,
     positionTimestampSec: null,
     lastContactTimestampSec: null,
+    squawk: null,
     registration: "N915AK",
     registeredOwner: "Alaska Airlines"
   }
