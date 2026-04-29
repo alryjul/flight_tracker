@@ -62,19 +62,38 @@ type FlightSnapshot = {
   flightsById: Map<string, Flight>;
 };
 
+// Why: critically-damped spring chase. Each "chase episode" begins when a new
+// reported position arrives — we capture the icon's current visual position
+// as `from`, set `target` to the new reported position, and stamp
+// `targetSetAt` with the current frame time. Between updates the rendered
+// position evolves continuously toward target via
+//   pos(t) = target + (from - target) × exp(-(t - targetSetAt) / SPRING_TAU_SEC)
+// The cap timestamp follows the same recurrence with the same time constant
+// (`fromProviderTimestampSec` chases `lastProviderTimestampSec`), keeping it
+// in lockstep with the icon — that's the invariant that prevents the trail
+// from leading the dot.
 type FlightAnimationState = {
   averageProviderDeltaSec: number | null;
+  identityKey: string;
+
+  // --- Position chase ---
   fromLatitude: number;
   fromLongitude: number;
-  identityKey: string;
-  lastProviderTimestampSec: number | null;
-  previousProviderTimestampSec: number | null;
-  startedAt: number;
   targetLatitude: number;
   targetLongitude: number;
+
+  // --- Cap-timestamp chase (matched τ → matches lag dynamics) ---
+  fromProviderTimestampSec: number | null;
+  lastProviderTimestampSec: number | null;
+
+  // --- Chase episode anchor ---
+  // Frame time (performance.now base) when the current target was set.
+  // All spring evaluations use elapsed = (frameTime - targetSetAt) / 1000.
+  targetSetAt: number;
+
+  // --- Auxiliary (heading/speed for trail filtering, breadcrumbs, debug) ---
   targetGroundspeedKnots: number | null;
   targetHeadingDegrees: number | null;
-  durationMs: number;
 };
 
 type BreadcrumbPoint = {
@@ -139,29 +158,34 @@ const MAX_TRACK_TO_AIRCRAFT_MILES = 2.5;
 const MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES = 100;
 const MIN_POSITION_CHANGE_MILES = 0.03;
 const MAX_POSITION_JITTER_DEADBAND_MILES = 0.12;
-const MIN_FLIGHT_ANIMATION_MS = 7500;
-const MAX_FLIGHT_ANIMATION_MS = 12000;
-const FLIGHT_ANIMATION_DURATION_MULTIPLIER = 1.25;
-const MAX_FLIGHT_COAST_SEC = 2.5;
+// Why: critically-damped spring time constant for the icon-position chase.
+// The rendered icon evolves toward the latest reported position via
+//   pos += (target - pos) × (1 - exp(-dt / τ))
+// In steady-state linear motion with poll interval P, the icon's lag behind
+// the *latest reported position* settles at
+//   L* = P × τ_avg / (1 - exp(-P/τ))
+// which for our P ≈ 4s polls gives ~8 s of icon-lag at τ = 6 s. The cap
+// timestamp uses the same τ so trail and icon move in lockstep — that's
+// the invariant that prevents the trail from leading the dot.
+//
+// Tuning intuition: bigger τ = laxer chase = more lag, more glide.
+// Smaller τ = stiffer chase = less lag, more reactive (visible "snaps" on
+// turns at very small τ). 6 s is the "ambient buttery glide" sweet spot.
+const SPRING_TAU_SEC = 6;
 // Why: tuning factors used in two or more places. Naming them (a) makes the
 // intent obvious at the call site and (b) prevents the values drifting apart
 // when one spot gets tweaked.
 //
 // PROVIDER_DELTA_EMA_DECAY: the new sample's weight is (1 - decay). Larger
-//   decay = slower to react to changing poll cadence, smoother animation
-//   duration tracking. 0.65 gives ~3 polls of effective averaging.
+//   decay = slower to react to changing poll cadence. 0.65 gives ~3 polls
+//   of effective averaging. Used by the diagnostic and could be useful if
+//   we ever want τ to adapt to actual poll cadence.
 //
-// COAST_FRACTION_OF_AVG_DELTA: how much of the average inter-poll interval
-//   we're willing to coast past the last known position before freezing.
-//   0.35 is a "comfortable margin" — far less than the next-expected poll
-//   so we never overshoot, but enough to bridge typical jitter.
-//
-// DEADBAND_FRACTION_OF_EXPECTED: tiny moves below this fraction of the
-//   expected per-poll move are treated as jitter and suppressed. 0.25 = a
-//   quarter of expected move, which is small enough to keep the icon
+// DEADBAND_FRACTION_OF_EXPECTED_MOVE: tiny moves below this fraction of
+//   the expected per-poll move are treated as jitter and suppressed. 0.25
+//   = a quarter of expected move, which is small enough to keep the icon
 //   visibly responsive yet kills GPS noise on parked aircraft.
 const PROVIDER_DELTA_EMA_DECAY = 0.65;
-const COAST_FRACTION_OF_AVG_DELTA = 0.35;
 const DEADBAND_FRACTION_OF_EXPECTED_MOVE = 0.25;
 const ALTITUDE_TREND_THRESHOLD_FEET = 100;
 const AIRSPEED_TREND_THRESHOLD_KNOTS = 5;
@@ -1382,109 +1406,67 @@ function getFlightProviderTimestampSec(flight: Flight) {
   return flight.positionTimestampSec ?? flight.lastContactTimestampSec ?? null;
 }
 
+// Why: closed-form evaluation of the critically-damped spring at frameTime.
+// Between target updates, the state's (from, target, targetSetAt) fully
+// determines the chase; computing pos(t) doesn't require per-frame state
+// mutation. This keeps rendering stateless and makes time-warping (eg. for
+// debug snapshots) trivial.
+function computeSpringPosition(state: FlightAnimationState, frameTime: number) {
+  const elapsedSec = Math.max(0, (frameTime - state.targetSetAt) / 1000);
+  const factor = Math.exp(-elapsedSec / SPRING_TAU_SEC);
+  return {
+    latitude: state.targetLatitude + (state.fromLatitude - state.targetLatitude) * factor,
+    longitude: state.targetLongitude + (state.fromLongitude - state.targetLongitude) * factor
+  };
+}
+
+// Why: the cap timestamp chases lastProviderTimestampSec from
+// fromProviderTimestampSec at the SAME τ as the position chase, so the icon
+// position and the trail's time cap settle at the same lag. That invariant
+// is what guarantees the trail never leads the dot.
+function computeSpringProviderTimestampSec(
+  state: FlightAnimationState,
+  frameTime: number
+): number | null {
+  if (state.lastProviderTimestampSec == null) return null;
+  if (state.fromProviderTimestampSec == null) return state.lastProviderTimestampSec;
+  const elapsedSec = Math.max(0, (frameTime - state.targetSetAt) / 1000);
+  const factor = Math.exp(-elapsedSec / SPRING_TAU_SEC);
+  return (
+    state.lastProviderTimestampSec +
+    (state.fromProviderTimestampSec - state.lastProviderTimestampSec) * factor
+  );
+}
+
 function getAnimatedPosition(
   animationState: FlightAnimationState | undefined,
   fallbackFlight: Flight,
   frameTime: number
 ) {
-  if (!animationState || animationState.durationMs <= 0) {
+  if (!animationState) {
     return {
       latitude: fallbackFlight.latitude,
       longitude: fallbackFlight.longitude
     };
   }
-
-  const progress = Math.min(
-    Math.max((frameTime - animationState.startedAt) / animationState.durationMs, 0),
-    1
-  );
-
-  const interpolatedPosition = {
-    latitude:
-      animationState.fromLatitude +
-      (animationState.targetLatitude - animationState.fromLatitude) * progress,
-    longitude:
-      animationState.fromLongitude +
-      (animationState.targetLongitude - animationState.fromLongitude) * progress
-  };
-
-  if (progress < 1) {
-    return interpolatedPosition;
-  }
-
-  if (
-    animationState.targetGroundspeedKnots == null ||
-    animationState.targetHeadingDegrees == null ||
-    animationState.targetGroundspeedKnots <= 0
-  ) {
-    return interpolatedPosition;
-  }
-
-  const coastSec = getCoastSec(animationState, frameTime);
-  if (coastSec <= 0) {
-    return interpolatedPosition;
-  }
-
-  const coastDistanceMiles =
-    animationState.targetGroundspeedKnots * 1.15078 * (coastSec / 3600);
-
-  return projectCoordinate(
-    interpolatedPosition.latitude,
-    interpolatedPosition.longitude,
-    animationState.targetHeadingDegrees,
-    coastDistanceMiles
-  );
+  return computeSpringPosition(animationState, frameTime);
 }
 
-function projectCoordinate(
-  latitude: number,
-  longitude: number,
-  headingDegrees: number,
-  distanceMiles: number
-) {
-  const headingRadians = (headingDegrees * Math.PI) / 180;
-  const northMiles = Math.cos(headingRadians) * distanceMiles;
-  const eastMiles = Math.sin(headingRadians) * distanceMiles;
-  const nextLatitude = latitude + milesToLatitudeDelta(northMiles);
-  const nextLongitude = longitude + milesToLongitudeDelta(eastMiles, latitude);
-
-  return {
-    latitude: nextLatitude,
-    longitude: nextLongitude
-  };
-}
-
+// Why: still useful for "is the chase essentially settled" gates (eg.
+// breadcrumb-tail clipping, diagnostic logging). Returns 1 - factor so it
+// reads "0 = just started chase episode, 1 = fully settled" — same
+// semantic shape as the old animation progress, so call sites that gate on
+// `progress >= 0.995` continue to mean "done chasing."
 function getAnimationProgress(animationState: FlightAnimationState | undefined, frameTime: number) {
-  if (!animationState || animationState.durationMs <= 0) {
+  if (!animationState) {
     return 1;
   }
-
-  return Math.min(
-    Math.max((frameTime - animationState.startedAt) / animationState.durationMs, 0),
-    1
-  );
+  const elapsedSec = Math.max(0, (frameTime - animationState.targetSetAt) / 1000);
+  return 1 - Math.exp(-elapsedSec / SPRING_TAU_SEC);
 }
 
-// Why: the post-arrival coast window. Used by BOTH the icon position and the
-// cap timestamp so they stay in lockstep — sharing this helper enforces the
-// invariant by construction. Returns 0 when progress < 1 (negative
-// elapsedSinceArrivalSec gets clamped to 0).
-function getCoastSec(animationState: FlightAnimationState, frameTime: number) {
-  const elapsedSinceArrivalSec = Math.max(
-    0,
-    (frameTime - (animationState.startedAt + animationState.durationMs)) / 1000
-  );
-  const coastLimitSec = Math.max(
-    0,
-    (animationState.averageProviderDeltaSec ?? refreshMs / 1000) *
-      COAST_FRACTION_OF_AVG_DELTA
-  );
-  return Math.min(MAX_FLIGHT_COAST_SEC, coastLimitSec, elapsedSinceArrivalSec);
-}
-
-// Why: EMA over poll intervals — provider gives us positions every ~4 s but
-// the actual cadence varies, so we smooth it. Used to size animation
-// durations and the coast window. `null` sample preserves prior estimate;
+// Why: EMA over poll intervals. Retained on the state for diagnostics and
+// future adaptive-τ tuning. `null` sample preserves prior estimate;
 // first-ever sample seeds the average without smoothing.
 function updateProviderDeltaEma(prev: number | null, sample: number | null) {
   if (sample == null) return prev;
@@ -1496,24 +1478,10 @@ function getDisplayedProviderTimestampMs(
   animationState: FlightAnimationState | undefined,
   frameTime: number
 ) {
-  if (!animationState || animationState.lastProviderTimestampSec == null) {
-    return null;
-  }
-
-  const progress = getAnimationProgress(animationState, frameTime);
-  const previousProviderTimestampSec =
-    animationState.previousProviderTimestampSec ?? animationState.lastProviderTimestampSec;
-  const interpolatedProviderTimestampSec =
-    previousProviderTimestampSec +
-    (animationState.lastProviderTimestampSec - previousProviderTimestampSec) * progress;
-
-  if (progress < 1) {
-    return interpolatedProviderTimestampSec * 1000;
-  }
-
-  // Same coast window as the icon — the shared helper keeps them in sync,
-  // which is the invariant that prevents the trail from leading the dot.
-  return (animationState.lastProviderTimestampSec + getCoastSec(animationState, frameTime)) * 1000;
+  const sec = animationState
+    ? computeSpringProviderTimestampSec(animationState, frameTime)
+    : null;
+  return sec == null ? null : sec * 1000;
 }
 
 function clipBreadcrumbCoordinatesToAnimation(
@@ -1618,31 +1586,25 @@ function updateFlightAnimationStates(
     const providerTimestampSec = getFlightProviderTimestampSec(flight);
 
     if (!existingState || existingState.identityKey !== identityKey) {
+      // Fresh chase: from = target = current. The spring is "at rest" at
+      // the reported position with zero lag.
       nextStates.set(flight.id, {
         averageProviderDeltaSec: null,
         fromLatitude: flight.latitude,
         fromLongitude: flight.longitude,
         identityKey,
+        fromProviderTimestampSec: providerTimestampSec,
         lastProviderTimestampSec: providerTimestampSec,
-        previousProviderTimestampSec: providerTimestampSec,
-        startedAt: frameTime,
+        targetSetAt: frameTime,
         targetLatitude: flight.latitude,
         targetLongitude: flight.longitude,
         targetGroundspeedKnots: flight.groundspeedKnots,
-        targetHeadingDegrees: flight.headingDegrees,
-        durationMs: 0
+        targetHeadingDegrees: flight.headingDegrees
       });
       continue;
     }
 
-    const currentRenderedPosition = getAnimatedPosition(existingState, flight, frameTime);
-    const targetUnchanged =
-      getFlightPositionSnapshotKey({
-        ...flight,
-        latitude: existingState.targetLatitude,
-        longitude: existingState.targetLongitude
-      }) === getFlightPositionSnapshotKey(flight);
-
+    // Provider timestamp didn't advance — no new info, keep the chase running.
     if (
       providerTimestampSec != null &&
       existingState.lastProviderTimestampSec != null &&
@@ -1661,7 +1623,16 @@ function updateFlightAnimationStates(
       providerDeltaSec
     );
 
+    const targetUnchanged =
+      getFlightPositionSnapshotKey({
+        ...flight,
+        latitude: existingState.targetLatitude,
+        longitude: existingState.targetLongitude
+      }) === getFlightPositionSnapshotKey(flight);
+
     if (targetUnchanged) {
+      // Same target — let the spring continue from wherever it is. We just
+      // refresh aux fields.
       nextStates.set(flight.id, {
         ...existingState,
         averageProviderDeltaSec,
@@ -1671,31 +1642,30 @@ function updateFlightAnimationStates(
       });
       continue;
     }
-    const durationMs = Math.min(
-      MAX_FLIGHT_ANIMATION_MS,
-      Math.max(
-        MIN_FLIGHT_ANIMATION_MS,
-        Math.round(
-          (averageProviderDeltaSec ?? refreshMs / 1000) *
-            1000 *
-            FLIGHT_ANIMATION_DURATION_MULTIPLIER
-        )
-      )
+
+    // New target. Capture the spring's current visual position as the new
+    // chase start, then update target. Because we capture *exactly* where
+    // the chase is right now, the spring continues smoothly through this
+    // reset — no position discontinuity even when the target jumps. Same
+    // for the cap timestamp.
+    const currentSpringPosition = computeSpringPosition(existingState, frameTime);
+    const currentSpringProviderTimestampSec = computeSpringProviderTimestampSec(
+      existingState,
+      frameTime
     );
 
     nextStates.set(flight.id, {
       averageProviderDeltaSec,
-      fromLatitude: currentRenderedPosition.latitude,
-      fromLongitude: currentRenderedPosition.longitude,
+      fromLatitude: currentSpringPosition.latitude,
+      fromLongitude: currentSpringPosition.longitude,
       identityKey,
+      fromProviderTimestampSec: currentSpringProviderTimestampSec,
       lastProviderTimestampSec: providerTimestampSec ?? existingState.lastProviderTimestampSec,
-      previousProviderTimestampSec: existingState.lastProviderTimestampSec,
-      startedAt: frameTime,
+      targetSetAt: frameTime,
       targetLatitude: flight.latitude,
       targetLongitude: flight.longitude,
       targetGroundspeedKnots: flight.groundspeedKnots,
-      targetHeadingDegrees: flight.headingDegrees,
-      durationMs
+      targetHeadingDegrees: flight.headingDegrees
     });
   }
 
@@ -3273,9 +3243,18 @@ export function FlightMap() {
           }
         }
 
+        // Spring "settledness" — 0 = chase episode just started, 1 = chase
+        // has fully converged on target. > 0.995 means lag is < 0.5% of the
+        // jump (effectively at target).
         const progress = animState ? getAnimationProgress(animState, frameTime) : null;
         const phase =
-          progress == null ? "no-animation" : progress < 1 ? "lerping" : "coasting";
+          progress == null
+            ? "no-animation"
+            : progress >= 0.995
+              ? "settled"
+              : "chasing";
+        const chaseElapsedSec =
+          animState ? (frameTime - animState.targetSetAt) / 1000 : null;
 
         // Helper: project a (lat, lon) point onto the icon's heading vector.
         // Returns signed miles ahead of the icon (positive = beyond the dot).
@@ -3358,15 +3337,16 @@ export function FlightMap() {
         // without expanding objects in DevTools — easier to copy/paste back.
         const fmt = (v: number | null, digits = 4) =>
           v == null ? "null" : v.toFixed(digits);
-        const providerDelta =
-          animState?.lastProviderTimestampSec != null &&
-          animState?.previousProviderTimestampSec != null
-            ? animState.lastProviderTimestampSec -
-              animState.previousProviderTimestampSec
-            : null;
-        const capRelLast =
+        // Spring chase summary. avgProviderDelta is the EMA of poll
+        // intervals (steady-state ~4 s); capLagSec is how far the cap
+        // chase trails the latest provider time at this frame (positive
+        // = trail tip is BEHIND latest provider, which is the desired
+        // condition — equal to the position chase's lag and ≈ τ in
+        // steady state).
+        const avgProviderDelta = animState?.averageProviderDeltaSec ?? null;
+        const capLagSec =
           cap != null && animState?.lastProviderTimestampSec != null
-            ? cap / 1000 - animState.lastProviderTimestampSec
+            ? animState.lastProviderTimestampSec - cap / 1000
             : null;
 
         const trailTipStr = trailTip
@@ -3404,11 +3384,11 @@ export function FlightMap() {
           : "null";
 
         const summary =
-          `[trail-debug] sel=${selectedId} phase=${phase} prog=${fmt(progress, 3)} ` +
+          `[trail-debug] sel=${selectedId} phase=${phase} prog=${fmt(progress, 3)} chaseElapsed=${fmt(chaseElapsedSec, 2)}s τ=${SPRING_TAU_SEC}s ` +
           `icon=(${fmt(iconLat, 5)},${fmt(iconLon, 5)}) ` +
           `heading=${fmt(animState?.targetHeadingDegrees ?? null, 1)}° ` +
           `gs=${fmt(animState?.targetGroundspeedKnots ?? null, 0)}kt ` +
-          `capRelLast=${fmt(capRelLast, 2)}s providerDelta=${fmt(providerDelta, 1)}s | ` +
+          `capLag=${fmt(capLagSec, 2)}s avgProviderDelta=${fmt(avgProviderDelta, 1)}s | ` +
           `provTrack(n=${providerTrack.length}) tip=${trailTipStr} | ` +
           `breadcrumbs(n=${breadcrumbs.length}) tip=${bcTipStr} | ` +
           `painted(segs=${paintedSegments.length}, coords=${paintedTotalCoordCount}) tip=${paintedTipStr} prev=${paintedPrevStr}`;
