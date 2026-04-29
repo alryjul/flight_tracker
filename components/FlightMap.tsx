@@ -143,6 +143,26 @@ const MIN_FLIGHT_ANIMATION_MS = 7500;
 const MAX_FLIGHT_ANIMATION_MS = 12000;
 const FLIGHT_ANIMATION_DURATION_MULTIPLIER = 1.25;
 const MAX_FLIGHT_COAST_SEC = 2.5;
+// Why: tuning factors used in two or more places. Naming them (a) makes the
+// intent obvious at the call site and (b) prevents the values drifting apart
+// when one spot gets tweaked.
+//
+// PROVIDER_DELTA_EMA_DECAY: the new sample's weight is (1 - decay). Larger
+//   decay = slower to react to changing poll cadence, smoother animation
+//   duration tracking. 0.65 gives ~3 polls of effective averaging.
+//
+// COAST_FRACTION_OF_AVG_DELTA: how much of the average inter-poll interval
+//   we're willing to coast past the last known position before freezing.
+//   0.35 is a "comfortable margin" — far less than the next-expected poll
+//   so we never overshoot, but enough to bridge typical jitter.
+//
+// DEADBAND_FRACTION_OF_EXPECTED: tiny moves below this fraction of the
+//   expected per-poll move are treated as jitter and suppressed. 0.25 = a
+//   quarter of expected move, which is small enough to keep the icon
+//   visibly responsive yet kills GPS noise on parked aircraft.
+const PROVIDER_DELTA_EMA_DECAY = 0.65;
+const COAST_FRACTION_OF_AVG_DELTA = 0.35;
+const DEADBAND_FRACTION_OF_EXPECTED_MOVE = 0.25;
 const ALTITUDE_TREND_THRESHOLD_FEET = 100;
 const AIRSPEED_TREND_THRESHOLD_KNOTS = 5;
 const METRIC_TREND_LOOKBACK_MS = 1000 * 30;
@@ -1400,16 +1420,7 @@ function getAnimatedPosition(
     return interpolatedPosition;
   }
 
-  const elapsedSinceArrivalSec = Math.max(
-    0,
-    (frameTime - (animationState.startedAt + animationState.durationMs)) / 1000
-  );
-  const coastSec = Math.min(
-    MAX_FLIGHT_COAST_SEC,
-    Math.max(0, (animationState.averageProviderDeltaSec ?? refreshMs / 1000) * 0.35),
-    elapsedSinceArrivalSec
-  );
-
+  const coastSec = getCoastSec(animationState, frameTime);
   if (coastSec <= 0) {
     return interpolatedPosition;
   }
@@ -1454,6 +1465,33 @@ function getAnimationProgress(animationState: FlightAnimationState | undefined, 
   );
 }
 
+// Why: the post-arrival coast window. Used by BOTH the icon position and the
+// cap timestamp so they stay in lockstep — sharing this helper enforces the
+// invariant by construction. Returns 0 when progress < 1 (negative
+// elapsedSinceArrivalSec gets clamped to 0).
+function getCoastSec(animationState: FlightAnimationState, frameTime: number) {
+  const elapsedSinceArrivalSec = Math.max(
+    0,
+    (frameTime - (animationState.startedAt + animationState.durationMs)) / 1000
+  );
+  const coastLimitSec = Math.max(
+    0,
+    (animationState.averageProviderDeltaSec ?? refreshMs / 1000) *
+      COAST_FRACTION_OF_AVG_DELTA
+  );
+  return Math.min(MAX_FLIGHT_COAST_SEC, coastLimitSec, elapsedSinceArrivalSec);
+}
+
+// Why: EMA over poll intervals — provider gives us positions every ~4 s but
+// the actual cadence varies, so we smooth it. Used to size animation
+// durations and the coast window. `null` sample preserves prior estimate;
+// first-ever sample seeds the average without smoothing.
+function updateProviderDeltaEma(prev: number | null, sample: number | null) {
+  if (sample == null) return prev;
+  if (prev == null) return sample;
+  return prev * PROVIDER_DELTA_EMA_DECAY + sample * (1 - PROVIDER_DELTA_EMA_DECAY);
+}
+
 function getDisplayedProviderTimestampMs(
   animationState: FlightAnimationState | undefined,
   frameTime: number
@@ -1473,16 +1511,9 @@ function getDisplayedProviderTimestampMs(
     return interpolatedProviderTimestampSec * 1000;
   }
 
-  const elapsedSinceArrivalSec = Math.max(
-    0,
-    (frameTime - (animationState.startedAt + animationState.durationMs)) / 1000
-  );
-  const coastLimitSec = Math.min(
-    MAX_FLIGHT_COAST_SEC,
-    Math.max(0, (animationState.averageProviderDeltaSec ?? refreshMs / 1000) * 0.35)
-  );
-
-  return (animationState.lastProviderTimestampSec + Math.min(elapsedSinceArrivalSec, coastLimitSec)) * 1000;
+  // Same coast window as the icon — the shared helper keeps them in sync,
+  // which is the invariant that prevents the trail from leading the dot.
+  return (animationState.lastProviderTimestampSec + getCoastSec(animationState, frameTime)) * 1000;
 }
 
 function clipBreadcrumbCoordinatesToAnimation(
@@ -1559,7 +1590,7 @@ function stabilizeFlightsForJitter(nextFlights: Flight[], currentFlights: Flight
     const expectedMoveMiles = effectiveGroundspeedKnots * 1.15078 * (refreshMs / 3_600_000);
     const dynamicDeadbandMiles = Math.min(
       MAX_POSITION_JITTER_DEADBAND_MILES,
-      Math.max(MIN_POSITION_CHANGE_MILES, expectedMoveMiles * 0.25)
+      Math.max(MIN_POSITION_CHANGE_MILES, expectedMoveMiles * DEADBAND_FRACTION_OF_EXPECTED_MOVE)
     );
 
     if (deltaMiles < dynamicDeadbandMiles) {
@@ -1621,18 +1652,16 @@ function updateFlightAnimationStates(
       continue;
     }
 
-    if (targetUnchanged) {
-      const providerDeltaSec =
-        providerTimestampSec != null && existingState.lastProviderTimestampSec != null
-          ? providerTimestampSec - existingState.lastProviderTimestampSec
-          : null;
-      const averageProviderDeltaSec =
-        providerDeltaSec == null
-          ? existingState.averageProviderDeltaSec
-          : existingState.averageProviderDeltaSec == null
-            ? providerDeltaSec
-            : existingState.averageProviderDeltaSec * 0.65 + providerDeltaSec * 0.35;
+    const providerDeltaSec =
+      providerTimestampSec != null && existingState.lastProviderTimestampSec != null
+        ? providerTimestampSec - existingState.lastProviderTimestampSec
+        : null;
+    const averageProviderDeltaSec = updateProviderDeltaEma(
+      existingState.averageProviderDeltaSec,
+      providerDeltaSec
+    );
 
+    if (targetUnchanged) {
       nextStates.set(flight.id, {
         ...existingState,
         averageProviderDeltaSec,
@@ -1642,17 +1671,6 @@ function updateFlightAnimationStates(
       });
       continue;
     }
-
-    const providerDeltaSec =
-      providerTimestampSec != null && existingState.lastProviderTimestampSec != null
-        ? providerTimestampSec - existingState.lastProviderTimestampSec
-        : null;
-    const averageProviderDeltaSec =
-      providerDeltaSec == null
-        ? existingState.averageProviderDeltaSec
-        : existingState.averageProviderDeltaSec == null
-          ? providerDeltaSec
-          : existingState.averageProviderDeltaSec * 0.65 + providerDeltaSec * 0.35;
     const durationMs = Math.min(
       MAX_FLIGHT_ANIMATION_MS,
       Math.max(
