@@ -63,12 +63,13 @@ export async function fetchOpenSkySelectedFlightTrack(icao24: string) {
       time: "0"
     });
 
+    const requestInit: RequestInit = { cache: "no-store" };
+    if (authorizationHeader) {
+      requestInit.headers = { Authorization: authorizationHeader };
+    }
     const response = await fetch(
       `https://opensky-network.org/api/tracks/all?${searchParams.toString()}`,
-      {
-        headers: authorizationHeader ? { Authorization: authorizationHeader } : undefined,
-        cache: "no-store"
-      }
+      requestInit
     );
 
     if (response.status === 404) {

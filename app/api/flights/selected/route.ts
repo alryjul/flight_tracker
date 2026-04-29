@@ -55,6 +55,14 @@ function primeFeedMetadataFromTrustedAeroApiDetails(
   });
 }
 
+function parseOptionalFiniteNumber(value: string | null) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function getFlightFromSearchParams(searchParams: URLSearchParams): Flight | null {
   const id = searchParams.get("id");
   const callsign = searchParams.get("callsign");
@@ -74,15 +82,9 @@ function getFlightFromSearchParams(searchParams: URLSearchParams): Flight | null
     aircraftType: searchParams.get("aircraftType"),
     origin: searchParams.get("origin"),
     destination: searchParams.get("destination"),
-    altitudeFeet: searchParams.get("altitudeFeet")
-      ? Number(searchParams.get("altitudeFeet"))
-      : null,
-    groundspeedKnots: searchParams.get("groundspeedKnots")
-      ? Number(searchParams.get("groundspeedKnots"))
-      : null,
-    headingDegrees: searchParams.get("headingDegrees")
-      ? Number(searchParams.get("headingDegrees"))
-      : null,
+    altitudeFeet: parseOptionalFiniteNumber(searchParams.get("altitudeFeet")),
+    groundspeedKnots: parseOptionalFiniteNumber(searchParams.get("groundspeedKnots")),
+    headingDegrees: parseOptionalFiniteNumber(searchParams.get("headingDegrees")),
     positionTimestampSec: null,
     lastContactTimestampSec: null,
     registration: searchParams.get("registration"),
@@ -90,16 +92,27 @@ function getFlightFromSearchParams(searchParams: URLSearchParams): Flight | null
   };
 }
 
+const SELECTED_FRESH_CACHE_HEADER = "private, max-age=10, stale-while-revalidate=60";
+const SELECTED_ERROR_CACHE_HEADER = "no-store";
+
+function jsonResponse(
+  body: Record<string, unknown>,
+  init: { status?: number; cacheControl: string }
+) {
+  return NextResponse.json(body, {
+    status: init.status ?? 200,
+    headers: { "Cache-Control": init.cacheControl }
+  });
+}
+
 export async function GET(request: NextRequest) {
   const flight = getFlightFromSearchParams(request.nextUrl.searchParams);
   const bypassCache = request.nextUrl.searchParams.get("refresh") === "1";
 
   if (!flight) {
-    return NextResponse.json(
-      {
-        error: "Missing required selected flight parameters"
-      },
-      { status: 400 }
+    return jsonResponse(
+      { error: "Missing required selected flight parameters: id and callsign" },
+      { status: 400, cacheControl: SELECTED_ERROR_CACHE_HEADER }
     );
   }
 
@@ -162,34 +175,44 @@ export async function GET(request: NextRequest) {
     if (mergedDetails?.track.length) {
       primeFeedMetadataFromTrustedAeroApiDetails(flight, trustedAeroApiDetails);
 
-      return NextResponse.json({
-        details: mergedDetails,
-        source:
-          trustedAeroApiDetails?.faFlightId
-            ? "aeroapi"
-            : adsbdbMetadata
-              ? "aeroapi+adsbdb"
-              : "opensky-track-fallback"
-      });
+      return jsonResponse(
+        {
+          details: mergedDetails,
+          source:
+            trustedAeroApiDetails?.faFlightId
+              ? "aeroapi"
+              : adsbdbMetadata
+                ? "aeroapi+adsbdb"
+                : "opensky-track-fallback"
+        },
+        { cacheControl: SELECTED_FRESH_CACHE_HEADER }
+      );
     }
 
     if (mergedDetails) {
       primeFeedMetadataFromTrustedAeroApiDetails(flight, trustedAeroApiDetails);
     }
 
-    return NextResponse.json({
-      details: mergedDetails,
-      source:
-        mergedDetails == null
-          ? "unavailable"
-          : trustedAeroApiDetails?.faFlightId
-            ? "aeroapi"
-            : adsbdbMetadata
-              ? "aeroapi+adsbdb"
-              : openSkyTrack.length > 0
-                ? "opensky-track-fallback"
-                : "aeroapi"
-    });
+    return jsonResponse(
+      {
+        details: mergedDetails,
+        source:
+          mergedDetails == null
+            ? "unavailable"
+            : trustedAeroApiDetails?.faFlightId
+              ? "aeroapi"
+              : adsbdbMetadata
+                ? "aeroapi+adsbdb"
+                : openSkyTrack.length > 0
+                  ? "opensky-track-fallback"
+                  : "aeroapi"
+      },
+      {
+        status: mergedDetails == null ? 503 : 200,
+        cacheControl:
+          mergedDetails == null ? SELECTED_ERROR_CACHE_HEADER : SELECTED_FRESH_CACHE_HEADER
+      }
+    );
   } catch (error) {
     console.error("Failed to load selected AeroAPI flight details", error);
 
@@ -199,29 +222,31 @@ export async function GET(request: NextRequest) {
         fetchOpenSkySelectedFlightTrack(flight.id)
       ]);
 
-      return NextResponse.json(
+      const fallbackDetails =
+        adsbdbMetadata || openSkyTrack.length > 0
+          ? {
+              aircraftType: adsbdbMetadata?.aircraftType ?? flight.aircraftType,
+              airline:
+                (flight.flightNumber == null ? adsbdbMetadata?.airline : null) ?? flight.airline,
+              destination:
+                (flight.flightNumber == null ? adsbdbMetadata?.destination : null) ??
+                flight.destination,
+              faFlightId: null,
+              flightNumber:
+                (flight.flightNumber == null ? adsbdbMetadata?.flightNumber : null) ??
+                flight.flightNumber,
+              origin:
+                (flight.flightNumber == null ? adsbdbMetadata?.origin : null) ?? flight.origin,
+              registration: adsbdbMetadata?.registration ?? flight.registration,
+              registeredOwner: adsbdbMetadata?.registeredOwner ?? flight.registeredOwner,
+              status: null,
+              track: openSkyTrack
+            }
+          : null;
+
+      return jsonResponse(
         {
-          details:
-            adsbdbMetadata || openSkyTrack.length > 0
-              ? {
-                  aircraftType: adsbdbMetadata?.aircraftType ?? flight.aircraftType,
-                  airline:
-                    (flight.flightNumber == null ? adsbdbMetadata?.airline : null) ?? flight.airline,
-                  destination:
-                    (flight.flightNumber == null ? adsbdbMetadata?.destination : null) ??
-                    flight.destination,
-                  faFlightId: null,
-                  flightNumber:
-                    (flight.flightNumber == null ? adsbdbMetadata?.flightNumber : null) ??
-                    flight.flightNumber,
-                  origin:
-                    (flight.flightNumber == null ? adsbdbMetadata?.origin : null) ?? flight.origin,
-                  registration: adsbdbMetadata?.registration ?? flight.registration,
-                  registeredOwner: adsbdbMetadata?.registeredOwner ?? flight.registeredOwner,
-                  status: null,
-                  track: openSkyTrack
-                }
-              : null,
+          details: fallbackDetails,
           source:
             adsbdbMetadata != null
               ? "adsbdb-fallback"
@@ -229,17 +254,18 @@ export async function GET(request: NextRequest) {
                 ? "opensky-track-fallback"
                 : "aeroapi-error"
         },
-        { status: 200 }
+        {
+          status: fallbackDetails == null ? 502 : 200,
+          cacheControl:
+            fallbackDetails == null ? SELECTED_ERROR_CACHE_HEADER : SELECTED_FRESH_CACHE_HEADER
+        }
       );
     } catch (openSkyError) {
       console.error("Failed to load OpenSky selected flight track fallback", openSkyError);
 
-      return NextResponse.json(
-        {
-          details: null,
-          source: "aeroapi-error"
-        },
-        { status: 200 }
+      return jsonResponse(
+        { details: null, source: "aeroapi-error" },
+        { status: 502, cacheControl: SELECTED_ERROR_CACHE_HEADER }
       );
     }
   }

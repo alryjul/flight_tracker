@@ -106,14 +106,15 @@ export async function fetchOpenSkyFlights(
     lomax: String(lomax)
   });
 
+  const requestInit: RequestInit = {
+    next: { revalidate: 0 }
+  } as RequestInit;
+  if (authorizationHeader) {
+    requestInit.headers = { Authorization: authorizationHeader };
+  }
   const response = await fetch(
     `https://opensky-network.org/api/states/all?${searchParams.toString()}`,
-    {
-      headers: authorizationHeader ? { Authorization: authorizationHeader } : undefined,
-      next: {
-        revalidate: 0
-      }
-    }
+    requestInit
   );
 
   if (!response.ok) {

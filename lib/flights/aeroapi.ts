@@ -15,6 +15,12 @@ const RATE_LIMIT_NULL_TTL_MS = 1000 * 30;
 const CURRENT_RECORD_LOOKBACK_MS = 1000 * 60 * 60 * 6;
 const RECENT_ARRIVAL_GRACE_MS = 1000 * 60 * 20;
 const UPCOMING_DEPARTURE_WINDOW_MS = 1000 * 60 * 60 * 6;
+// Why: long-running processes (and dev servers reloaded for hours) accumulate
+// every flight they've ever seen if these maps are uncapped.
+const DETAIL_CACHE_MAX_ENTRIES = 500;
+const FEED_METADATA_CACHE_MAX_ENTRIES = 1000;
+const OPERATOR_CACHE_MAX_ENTRIES = 200;
+const FEED_METADATA_WARM_MAX_ENTRIES = 50;
 
 type CacheEntry<T> = {
   expiresAt: number;
@@ -138,6 +144,10 @@ function getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string) {
     return undefined;
   }
 
+  // Why: Map iteration order = insertion order. Re-inserting on read promotes
+  // the entry to "most recently used," so eviction below removes cold entries.
+  cache.delete(key);
+  cache.set(key, cached);
   return cached.value;
 }
 
@@ -145,8 +155,16 @@ function setCachedValue<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
   value: T,
-  ttlMs: number
+  ttlMs: number,
+  maxEntries?: number
 ) {
+  if (maxEntries != null && !cache.has(key) && cache.size >= maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+
   cache.set(key, {
     expiresAt: Date.now() + ttlMs,
     value
@@ -477,7 +495,7 @@ async function resolveOperatorName(operatorCode: string | null) {
   const request = (async () => {
     const data = await fetchJson<AeroApiOperatorResponse>(`/operators/${normalizedCode}`);
     const name = data?.shortname || data?.name || null;
-    setCachedValue(operatorCache, normalizedCode, name, OPERATOR_TTL_MS);
+    setCachedValue(operatorCache, normalizedCode, name, OPERATOR_TTL_MS, OPERATOR_CACHE_MAX_ENTRIES);
     return name;
   })();
 
@@ -652,7 +670,7 @@ async function fetchAeroApiFeedMetadata(flight: Flight): Promise<AeroApiFeedMeta
     const bestMatch = await resolveBestFlightRecord(flight, { requireCurrent: true });
 
     if (!bestMatch) {
-      setCachedValue(feedMetadataCache, cacheKey, null, FEED_METADATA_TTL_MS);
+      setCachedValue(feedMetadataCache, cacheKey, null, FEED_METADATA_TTL_MS, FEED_METADATA_CACHE_MAX_ENTRIES);
       return null;
     }
 
@@ -665,7 +683,7 @@ async function fetchAeroApiFeedMetadata(flight: Flight): Promise<AeroApiFeedMeta
       registration: null
     };
 
-    setCachedValue(feedMetadataCache, cacheKey, metadata, FEED_METADATA_TTL_MS);
+    setCachedValue(feedMetadataCache, cacheKey, metadata, FEED_METADATA_TTL_MS, FEED_METADATA_CACHE_MAX_ENTRIES);
     return metadata;
   })();
 
@@ -720,7 +738,7 @@ async function drainFeedMetadataWarmQueue() {
     } catch (error) {
       if (error instanceof AeroApiRequestError && error.status === 429) {
         feedMetadataCooldownUntil = Date.now() + FEED_METADATA_RATE_LIMIT_COOLDOWN_MS;
-        setCachedValue(feedMetadataCache, cacheKey, null, RATE_LIMIT_NULL_TTL_MS);
+        setCachedValue(feedMetadataCache, cacheKey, null, RATE_LIMIT_NULL_TTL_MS, FEED_METADATA_CACHE_MAX_ENTRIES);
         console.warn("AeroAPI feed enrichment rate limited; cooling down strip enrichment", {
           flightId: flight.id,
           callsign: flight.callsign
@@ -755,13 +773,31 @@ function queueFeedMetadataWarm(flights: Flight[]) {
     }
 
     prioritizedCacheKeys.push(cacheKey);
-
-    if (!feedMetadataWarmFlights.has(cacheKey)) {
-      feedMetadataWarmFlights.set(cacheKey, flight);
-      continue;
-    }
-
     feedMetadataWarmFlights.set(cacheKey, flight);
+  }
+
+  // Why: cap the warm-flights map. If the queue grows faster than it drains
+  // (e.g., long cooldown, low-traffic backend), drop the oldest pending entries.
+  if (feedMetadataWarmFlights.size > FEED_METADATA_WARM_MAX_ENTRIES) {
+    const overflow = feedMetadataWarmFlights.size - FEED_METADATA_WARM_MAX_ENTRIES;
+    const droppedKeys: string[] = [];
+    const iterator = feedMetadataWarmFlights.keys();
+    for (let i = 0; i < overflow; i += 1) {
+      const next = iterator.next();
+      if (next.done || next.value == null) break;
+      droppedKeys.push(next.value);
+    }
+    for (const key of droppedKeys) {
+      feedMetadataWarmFlights.delete(key);
+    }
+    if (droppedKeys.length > 0) {
+      const droppedSet = new Set(droppedKeys);
+      for (let i = feedMetadataWarmQueue.length - 1; i >= 0; i -= 1) {
+        if (droppedSet.has(feedMetadataWarmQueue[i]!)) {
+          feedMetadataWarmQueue.splice(i, 1);
+        }
+      }
+    }
   }
 
   if (prioritizedCacheKeys.length > 0) {
@@ -837,7 +873,7 @@ export function primeAeroApiFeedMetadata(
     return;
   }
 
-  setCachedValue(feedMetadataCache, getFeedMetadataCacheKey(flight), value, FEED_METADATA_TTL_MS);
+  setCachedValue(feedMetadataCache, getFeedMetadataCacheKey(flight), value, FEED_METADATA_TTL_MS, FEED_METADATA_CACHE_MAX_ENTRIES);
 }
 
 export async function enrichFlightsWithAeroApiMetadata(
@@ -911,16 +947,18 @@ export async function fetchAeroApiSelectedFlightDetails(
   flight: Flight,
   options?: { bypassCache?: boolean }
 ): Promise<SelectedFlightDetails | null> {
-  if (Date.now() < detailCooldownUntil) {
-    return null;
-  }
-
   const cacheKey = getDetailCacheKey(flight);
   const bypassCache = options?.bypassCache ?? false;
   const cached = bypassCache ? undefined : getCachedValue(detailCache, cacheKey);
 
+  // Why: serve cached data even during a rate-limit cooldown — we already paid
+  // for it, and returning null here would needlessly blank the selected card.
   if (cached !== undefined) {
     return cached;
+  }
+
+  if (Date.now() < detailCooldownUntil) {
+    return null;
   }
 
   const inFlightRequest = detailRequests.get(cacheKey);
@@ -937,7 +975,7 @@ export async function fetchAeroApiSelectedFlightDetails(
       });
 
       if (!currentBestMatch) {
-        setCachedValue(detailCache, cacheKey, null, DETAIL_NULL_TTL_MS);
+        setCachedValue(detailCache, cacheKey, null, DETAIL_NULL_TTL_MS, DETAIL_CACHE_MAX_ENTRIES);
         return null;
       }
 
@@ -978,13 +1016,13 @@ export async function fetchAeroApiSelectedFlightDetails(
         track
       };
 
-      setCachedValue(detailCache, cacheKey, details, DETAIL_TTL_MS);
+      setCachedValue(detailCache, cacheKey, details, DETAIL_TTL_MS, DETAIL_CACHE_MAX_ENTRIES);
 
       return details;
     } catch (error) {
       if (error instanceof AeroApiRequestError && error.status === 429) {
         detailCooldownUntil = Date.now() + DETAIL_RATE_LIMIT_COOLDOWN_MS;
-        setCachedValue(detailCache, cacheKey, null, RATE_LIMIT_NULL_TTL_MS);
+        setCachedValue(detailCache, cacheKey, null, RATE_LIMIT_NULL_TTL_MS, DETAIL_CACHE_MAX_ENTRIES);
         console.warn("AeroAPI selected-flight enrichment rate limited; cooling down", {
           flightId: flight.id,
           callsign: flight.callsign

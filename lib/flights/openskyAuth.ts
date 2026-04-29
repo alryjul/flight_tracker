@@ -10,6 +10,7 @@ type TokenCache = {
 
 let tokenCache: TokenCache | null = null;
 let tokenFailureCooldownUntil = 0;
+let inFlightTokenRequest: Promise<string | null> | null = null;
 
 function getLegacyBasicAuthHeader() {
   const username = process.env.OPENSKY_USERNAME;
@@ -22,22 +23,7 @@ function getLegacyBasicAuthHeader() {
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 }
 
-async function getOAuthAccessToken() {
-  const clientId = process.env.OPENSKY_CLIENT_ID;
-  const clientSecret = process.env.OPENSKY_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    return null;
-  }
-
-  if (tokenCache && Date.now() < tokenCache.expiresAt - TOKEN_REFRESH_MARGIN_MS) {
-    return tokenCache.accessToken;
-  }
-
-  if (Date.now() < tokenFailureCooldownUntil) {
-    return null;
-  }
-
+async function requestNewToken(clientId: string, clientSecret: string): Promise<string | null> {
   try {
     const response = await fetch(TOKEN_URL, {
       method: "POST",
@@ -77,6 +63,35 @@ async function getOAuthAccessToken() {
     console.error("OpenSky OAuth token request failed; falling back to unauthenticated mode", error);
     return null;
   }
+}
+
+async function getOAuthAccessToken() {
+  const clientId = process.env.OPENSKY_CLIENT_ID;
+  const clientSecret = process.env.OPENSKY_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+
+  if (tokenCache && Date.now() < tokenCache.expiresAt - TOKEN_REFRESH_MARGIN_MS) {
+    return tokenCache.accessToken;
+  }
+
+  if (Date.now() < tokenFailureCooldownUntil) {
+    return null;
+  }
+
+  // Why: multiple concurrent callers can pass the cache check at the same time.
+  // Coalesce them onto a single in-flight request so we don't burn token quota.
+  if (inFlightTokenRequest) {
+    return inFlightTokenRequest;
+  }
+
+  inFlightTokenRequest = requestNewToken(clientId, clientSecret).finally(() => {
+    inFlightTokenRequest = null;
+  });
+
+  return inFlightTokenRequest;
 }
 
 export async function getOpenSkyAuthorizationHeader() {

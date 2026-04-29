@@ -118,6 +118,10 @@ function normalizeLookupCallsign(callsign: string) {
   return normalized.length === 0 || normalized === "UNKNOWN" ? null : normalized;
 }
 
+const AIRCRAFT_CACHE_MAX_ENTRIES = 1000;
+const ROUTE_CACHE_MAX_ENTRIES = 1000;
+const COMBINED_CACHE_MAX_ENTRIES = 500;
+
 function getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string) {
   const cached = cache.get(key);
 
@@ -130,10 +134,26 @@ function getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string) {
     return undefined;
   }
 
+  // LRU touch.
+  cache.delete(key);
+  cache.set(key, cached);
   return cached.value;
 }
 
-function setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number) {
+function setCachedValue<T>(
+  cache: Map<string, CacheEntry<T>>,
+  key: string,
+  value: T,
+  ttlMs: number,
+  maxEntries?: number
+) {
+  if (maxEntries != null && !cache.has(key) && cache.size >= maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+
   cache.set(key, {
     expiresAt: Date.now() + ttlMs,
     value
@@ -172,7 +192,7 @@ async function fetchAircraftMetadata(icao24: string) {
     });
 
     if (response.status === 404) {
-      setCachedValue(aircraftCache, icao24, null, AIRCRAFT_TTL_MS);
+      setCachedValue(aircraftCache, icao24, null, AIRCRAFT_TTL_MS, AIRCRAFT_CACHE_MAX_ENTRIES);
       return null;
     }
 
@@ -191,7 +211,7 @@ async function fetchAircraftMetadata(icao24: string) {
             registeredOwner: aircraft.registered_owner || null
           };
 
-    setCachedValue(aircraftCache, icao24, value, AIRCRAFT_TTL_MS);
+    setCachedValue(aircraftCache, icao24, value, AIRCRAFT_TTL_MS, AIRCRAFT_CACHE_MAX_ENTRIES);
     return value;
   })();
 
@@ -229,7 +249,7 @@ async function fetchRouteMetadata(callsign: string) {
     });
 
     if (response.status === 404) {
-      setCachedValue(routeCache, normalizedCallsign, null, ROUTE_TTL_MS);
+      setCachedValue(routeCache, normalizedCallsign, null, ROUTE_TTL_MS, ROUTE_CACHE_MAX_ENTRIES);
       return null;
     }
 
@@ -249,7 +269,7 @@ async function fetchRouteMetadata(callsign: string) {
             destination: normalizeRouteEndpointValue(flightRoute.destination)
           };
 
-    setCachedValue(routeCache, normalizedCallsign, value, ROUTE_TTL_MS);
+    setCachedValue(routeCache, normalizedCallsign, value, ROUTE_TTL_MS, ROUTE_CACHE_MAX_ENTRIES);
     return value;
   })();
 
@@ -304,7 +324,7 @@ async function fetchCombinedMetadata(icao24: string, callsign: string) {
     );
 
     if (response.status === 404) {
-      setCachedValue(combinedCache, cacheKey, null, COMBINED_TTL_MS);
+      setCachedValue(combinedCache, cacheKey, null, COMBINED_TTL_MS, COMBINED_CACHE_MAX_ENTRIES);
       return null;
     }
 
@@ -334,11 +354,11 @@ async function fetchCombinedMetadata(icao24: string, callsign: string) {
           };
 
     if (aircraftMetadata) {
-      setCachedValue(aircraftCache, icao24, aircraftMetadata, AIRCRAFT_TTL_MS);
+      setCachedValue(aircraftCache, icao24, aircraftMetadata, AIRCRAFT_TTL_MS, AIRCRAFT_CACHE_MAX_ENTRIES);
     }
 
     if (routeMetadata) {
-      setCachedValue(routeCache, normalizedCallsign, routeMetadata, ROUTE_TTL_MS);
+      setCachedValue(routeCache, normalizedCallsign, routeMetadata, ROUTE_TTL_MS, ROUTE_CACHE_MAX_ENTRIES);
     }
 
     const value = {
@@ -346,7 +366,7 @@ async function fetchCombinedMetadata(icao24: string, callsign: string) {
       routeMetadata
     };
 
-    setCachedValue(combinedCache, cacheKey, value, COMBINED_TTL_MS);
+    setCachedValue(combinedCache, cacheKey, value, COMBINED_TTL_MS, COMBINED_CACHE_MAX_ENTRIES);
     return value;
   })();
 

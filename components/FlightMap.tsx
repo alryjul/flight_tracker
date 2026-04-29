@@ -500,8 +500,8 @@ function getMetricTrend(
     return null;
   }
 
-  const firstValue = meaningfulValues[0];
-  const lastValue = meaningfulValues[meaningfulValues.length - 1];
+  const firstValue = meaningfulValues[0]!;
+  const lastValue = meaningfulValues[meaningfulValues.length - 1]!;
   const netDelta = lastValue - firstValue;
 
   if (Math.abs(netDelta) < threshold) {
@@ -514,7 +514,7 @@ function getMetricTrend(
   let opposingSteps = 0;
 
   for (let index = 1; index < meaningfulValues.length; index += 1) {
-    const delta = meaningfulValues[index] - meaningfulValues[index - 1];
+    const delta = meaningfulValues[index]! - meaningfulValues[index - 1]!;
 
     if (Math.abs(delta) < stepThreshold) {
       continue;
@@ -701,21 +701,25 @@ function getBreadcrumbPoints(
 
   const sanitizedCoordinates = sanitizeCoordinateSequence(points.map((point) => point.coordinate));
 
-  return sanitizedCoordinates
-    .map((coordinate) => {
-      const point = points.find(
-        (candidate) =>
-          candidate.coordinate[0] === coordinate[0] && candidate.coordinate[1] === coordinate[1]
-      );
+  // Why: avoid an O(snapshots × sanitized) .find() inside .map() — index by
+  // a stringified coordinate key once, then look up in O(1).
+  const pointsByCoordinate = new Map<string, BreadcrumbPoint["providerTimestampSec"]>();
+  for (const point of points) {
+    const key = `${point.coordinate[0]},${point.coordinate[1]}`;
+    if (!pointsByCoordinate.has(key)) {
+      pointsByCoordinate.set(key, point.providerTimestampSec);
+    }
+  }
 
-      return point == null
-        ? null
-        : {
-            coordinate,
-            providerTimestampSec: point.providerTimestampSec
-          };
-    })
-    .filter((point): point is BreadcrumbPoint => point != null);
+  const breadcrumbs: BreadcrumbPoint[] = [];
+  for (const coordinate of sanitizedCoordinates) {
+    const key = `${coordinate[0]},${coordinate[1]}`;
+    const providerTimestampSec = pointsByCoordinate.get(key);
+    if (providerTimestampSec !== undefined) {
+      breadcrumbs.push({ coordinate, providerTimestampSec });
+    }
+  }
+  return breadcrumbs;
 }
 
 function getSanitizedTrackCoordinates(
@@ -756,11 +760,11 @@ function getSanitizedTrackCoordinates(
     if (sanitizedCoordinates.length === 0) {
       sanitizedCoordinates.push(...breadcrumbCoordinates);
     } else {
-      const providerTail = sanitizedCoordinates[sanitizedCoordinates.length - 1];
+      const providerTail = sanitizedCoordinates[sanitizedCoordinates.length - 1]!;
       const trimmedBreadcrumbCoordinates = [...breadcrumbCoordinates];
 
       while (trimmedBreadcrumbCoordinates.length > 0) {
-        const breadcrumbHead = trimmedBreadcrumbCoordinates[0];
+        const breadcrumbHead = trimmedBreadcrumbCoordinates[0]!;
         const connectorMiles = distanceBetweenPointsMiles({
           fromLatitude: providerTail[1],
           fromLongitude: providerTail[0],
@@ -800,7 +804,7 @@ function getSanitizedTrackCoordinates(
     return sanitizedCoordinates;
   }
 
-  const lastCoordinate = sanitizedCoordinates[sanitizedCoordinates.length - 1];
+  const lastCoordinate = sanitizedCoordinates[sanitizedCoordinates.length - 1]!;
   const tailPoint: [number, number] = [renderedPosition.longitude, renderedPosition.latitude];
   const tailSegmentMiles = distanceBetweenPointsMiles({
     fromLatitude: lastCoordinate[1],
@@ -820,6 +824,19 @@ function getSanitizedTrackCoordinates(
   return sanitizedCoordinates;
 }
 
+function hashTrackCoordinates(coordinates: [number, number][]) {
+  // Why: shape + last-3-points fingerprint is enough for our case — if any
+  // earlier coord changes the line is being rebuilt entirely (length differs).
+  if (coordinates.length === 0) {
+    return "0";
+  }
+  const head = coordinates[0]!;
+  const tail = coordinates[coordinates.length - 1]!;
+  return `${coordinates.length}|${head[0]},${head[1]}|${tail[0]},${tail[1]}`;
+}
+
+const trackSourceLastHashBySource = new WeakMap<GeoJSONSource, string>();
+
 function setSelectedTrackSourceData(
   source: GeoJSONSource | undefined,
   track: SelectedFlightDetailsResponse["details"] | null,
@@ -837,6 +854,12 @@ function setSelectedTrackSourceData(
     renderedPosition,
     displayedProviderTimestampMs
   );
+
+  const nextHash = hashTrackCoordinates(coordinates);
+  if (trackSourceLastHashBySource.get(source) === nextHash) {
+    return;
+  }
+  trackSourceLastHashBySource.set(source, nextHash);
 
   source.setData({
     type: "FeatureCollection",
@@ -2207,6 +2230,7 @@ export function FlightMap() {
     let cancelled = false;
     let nextPollTimeoutId: number | null = null;
     let requestSequence = 0;
+    let inFlightAbortController: AbortController | null = null;
 
     snapshotHistoryRef.current = [];
     flightAnimationStatesRef.current = new Map();
@@ -2220,7 +2244,17 @@ export function FlightMap() {
         radiusMiles: String(radiusMiles)
       });
       query.set("warmFeed", feedWarmEnabledRef.current ? "1" : "0");
-      const response = await fetch(`/api/flights?${query.toString()}`, { cache: "no-store" });
+      inFlightAbortController?.abort();
+      inFlightAbortController = new AbortController();
+      const response = await fetch(`/api/flights?${query.toString()}`, {
+        cache: "no-store",
+        signal: inFlightAbortController.signal
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
       const data = (await response.json()) as FlightApiResponse;
 
       if (cancelled || requestId !== requestSequence) {
@@ -2287,7 +2321,9 @@ export function FlightMap() {
       try {
         await loadFlights();
       } catch (error) {
-        console.error("Failed to poll flights", error);
+        if ((error as { name?: string } | null)?.name !== "AbortError") {
+          console.error("Failed to poll flights", error);
+        }
       } finally {
         if (!cancelled) {
           const elapsedMs = performance.now() - startedAt;
@@ -2307,6 +2343,7 @@ export function FlightMap() {
       if (nextPollTimeoutId != null) {
         window.clearTimeout(nextPollTimeoutId);
       }
+      inFlightAbortController?.abort();
     };
   }, [homeBase, radiusMiles]);
 
@@ -2321,6 +2358,7 @@ export function FlightMap() {
 
     let cancelled = false;
     let retryTimeoutId: number | null = null;
+    let inFlightAbortController: AbortController | null = null;
     const requestForSelection = selectedFlightRequest;
     const selectedFlightIdentityKey = getLiveFlightIdentityKey(requestForSelection);
     const selectedFlightRequestId = selectedFlightRequest.id;
@@ -2381,9 +2419,20 @@ export function FlightMap() {
         requestSearchParams.set("refresh", "1");
       }
 
+      inFlightAbortController?.abort();
+      inFlightAbortController = new AbortController();
       const response = await fetch(`/api/flights/selected?${requestSearchParams.toString()}`, {
-        cache: "no-store"
+        cache: "no-store",
+        signal: inFlightAbortController.signal
       });
+
+      if (!response.ok) {
+        console.warn(
+          `Selected flight details request returned ${response.status}; preserving existing details`
+        );
+        return null;
+      }
+
       const data = (await response.json()) as SelectedFlightDetailsResponse;
 
       if (!cancelled) {
@@ -2443,7 +2492,15 @@ export function FlightMap() {
     }
 
     async function attemptSelectedFlightEnrichment(attemptIndex: number, bypassCache: boolean) {
-      const data = await loadSelectedFlightDetails(bypassCache);
+      let data: SelectedFlightDetailsResponse | null = null;
+      try {
+        data = await loadSelectedFlightDetails(bypassCache);
+      } catch (error) {
+        if ((error as { name?: string } | null)?.name === "AbortError") {
+          return;
+        }
+        console.error("Failed to load selected flight details", error);
+      }
 
       if (cancelled || data == null) {
         return;
@@ -2468,6 +2525,7 @@ export function FlightMap() {
       if (retryTimeoutId != null) {
         window.clearTimeout(retryTimeoutId);
       }
+      inFlightAbortController?.abort();
     };
   }, [selectedFlightRequest, selectedFlightRequestKey]);
 
@@ -3227,17 +3285,18 @@ export function FlightMap() {
               <div className="strip-topline">
                 <strong className="strip-identifier">{getPrimaryIdentifier(flight)}</strong>
                 <span className="strip-meta">
-                  {stripRankChanges[flight.id] ? (
-                    <span
-                      aria-label={stripRankChanges[flight.id] > 0 ? "Moved closer" : "Moved farther"}
-                      className={`strip-rank-cue ${
-                        stripRankChanges[flight.id] > 0 ? "closer" : "farther"
-                      }`}
-                      title={stripRankChanges[flight.id] > 0 ? "Moved closer" : "Moved farther"}
-                    >
-                      {stripRankChanges[flight.id] > 0 ? "↑" : "↓"}
-                    </span>
-                  ) : null}
+                  {(() => {
+                    const rankChange = stripRankChanges[flight.id];
+                    return rankChange ? (
+                      <span
+                        aria-label={rankChange > 0 ? "Moved closer" : "Moved farther"}
+                        className={`strip-rank-cue ${rankChange > 0 ? "closer" : "farther"}`}
+                        title={rankChange > 0 ? "Moved closer" : "Moved farther"}
+                      >
+                        {rankChange > 0 ? "↑" : "↓"}
+                      </span>
+                    ) : null;
+                  })()}
                   <span
                     className={`strip-category equipment-tag family-${getAircraftTypeFamily(flight)}`}
                   >

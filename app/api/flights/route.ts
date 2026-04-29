@@ -13,6 +13,10 @@ export const revalidate = 0;
 
 const STALE_FEED_TTL_MS = 1000 * 60 * 3;
 const AEROAPI_DISCOVERY_COOLDOWN_MS = 1000 * 60 * 3;
+const MAX_RADIUS_MILES = 250;
+const FRESH_CACHE_HEADER = "private, max-age=2, stale-while-revalidate=30";
+const STALE_CACHE_HEADER = "private, max-age=0, stale-while-revalidate=30";
+const ERROR_CACHE_HEADER = "no-store";
 
 type CachedFeed = {
   fetchedAt: number;
@@ -35,18 +39,46 @@ function getDiscoveryProviderPreference() {
   }
 }
 
-function getAreaFromRequest(request: NextRequest) {
-  const latitude = Number(request.nextUrl.searchParams.get("latitude"));
-  const longitude = Number(request.nextUrl.searchParams.get("longitude"));
-  const radiusMiles = Number(request.nextUrl.searchParams.get("radiusMiles"));
+type ParsedArea =
+  | {
+      ok: true;
+      area: {
+        center: { latitude: number; longitude: number };
+        radiusMiles: number;
+      };
+    }
+  | { ok: false; error: string };
+
+function parseArea(request: NextRequest): ParsedArea {
+  const params = request.nextUrl.searchParams;
+  const rawLat = params.get("latitude");
+  const rawLon = params.get("longitude");
+  const rawRadius = params.get("radiusMiles");
+
+  const latitude = rawLat == null || rawLat === "" ? APP_CONFIG.center.latitude : Number(rawLat);
+  const longitude = rawLon == null || rawLon === "" ? APP_CONFIG.center.longitude : Number(rawLon);
+  const radiusMiles =
+    rawRadius == null || rawRadius === "" ? APP_CONFIG.radiusMiles : Number(rawRadius);
+
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    return { ok: false, error: "latitude must be a finite number in [-90, 90]" };
+  }
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    return { ok: false, error: "longitude must be a finite number in [-180, 180]" };
+  }
+  if (!Number.isFinite(radiusMiles) || radiusMiles <= 0 || radiusMiles > MAX_RADIUS_MILES) {
+    return {
+      ok: false,
+      error: `radiusMiles must be a finite number in (0, ${MAX_RADIUS_MILES}]`
+    };
+  }
 
   return {
-    center: {
-      latitude: Number.isFinite(latitude) ? latitude : APP_CONFIG.center.latitude,
-      longitude: Number.isFinite(longitude) ? longitude : APP_CONFIG.center.longitude
-    },
-    radiusMiles:
-      Number.isFinite(radiusMiles) && radiusMiles > 0 ? radiusMiles : APP_CONFIG.radiusMiles
+    ok: true,
+    area: {
+      center: { latitude, longitude },
+      radiusMiles
+    }
   };
 }
 
@@ -91,8 +123,24 @@ function getCachedFeed(area: {
   return cached.flights;
 }
 
+function jsonResponse(
+  body: Record<string, unknown>,
+  init: { status?: number; cacheControl: string }
+) {
+  return NextResponse.json(body, {
+    status: init.status ?? 200,
+    headers: { "Cache-Control": init.cacheControl }
+  });
+}
+
 export async function GET(request: NextRequest) {
-  const area = getAreaFromRequest(request);
+  const parsed = parseArea(request);
+
+  if (!parsed.ok) {
+    return jsonResponse({ error: parsed.error }, { status: 400, cacheControl: ERROR_CACHE_HEADER });
+  }
+
+  const { area } = parsed;
   const warmFeedMetadata = shouldWarmFeedMetadata(request);
   const discoveryProviderPreference = getDiscoveryProviderPreference();
   const canUseAeroApiDiscovery = hasAeroApiDiscoveryCredentials();
@@ -110,12 +158,15 @@ export async function GET(request: NextRequest) {
         flights
       });
 
-      return NextResponse.json({
-        source: "aeroapi-discovery",
-        center: area.center,
-        radiusMiles: area.radiusMiles,
-        flights
-      });
+      return jsonResponse(
+        {
+          source: "aeroapi-discovery",
+          center: area.center,
+          radiusMiles: area.radiusMiles,
+          flights
+        },
+        { cacheControl: FRESH_CACHE_HEADER }
+      );
     } catch (error) {
       aeroApiDiscoveryCooldownUntil = Date.now() + AEROAPI_DISCOVERY_COOLDOWN_MS;
       console.error("Failed to load AeroAPI discovery flights", error);
@@ -124,37 +175,40 @@ export async function GET(request: NextRequest) {
         const cachedFlights = getCachedFeed(area);
 
         if (cachedFlights) {
-          return NextResponse.json(
+          return jsonResponse(
             {
               source: "aeroapi-stale",
               center: area.center,
               radiusMiles: area.radiusMiles,
               flights: cachedFlights
             },
-            { status: 200 }
+            { cacheControl: STALE_CACHE_HEADER }
           );
         }
 
-        return NextResponse.json(
+        return jsonResponse(
           {
             source: "aeroapi-unavailable",
             center: area.center,
             radiusMiles: area.radiusMiles,
             flights: []
           },
-          { status: 200 }
+          { status: 503, cacheControl: ERROR_CACHE_HEADER }
         );
       }
     }
   }
 
   if (useMockData) {
-    return NextResponse.json({
-      source: "mock",
-      center: area.center,
-      radiusMiles: area.radiusMiles,
-      flights: buildMockFlights(area.center)
-    });
+    return jsonResponse(
+      {
+        source: "mock",
+        center: area.center,
+        radiusMiles: area.radiusMiles,
+        flights: buildMockFlights(area.center)
+      },
+      { cacheControl: FRESH_CACHE_HEADER }
+    );
   }
 
   try {
@@ -166,37 +220,40 @@ export async function GET(request: NextRequest) {
       flights
     });
 
-    return NextResponse.json({
-      source: "opensky",
-      center: area.center,
-      radiusMiles: area.radiusMiles,
-      flights
-    });
+    return jsonResponse(
+      {
+        source: "opensky",
+        center: area.center,
+        radiusMiles: area.radiusMiles,
+        flights
+      },
+      { cacheControl: FRESH_CACHE_HEADER }
+    );
   } catch (error) {
     console.error("Failed to load OpenSky flights", error);
 
     const cachedFlights = getCachedFeed(area);
 
     if (cachedFlights) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           source: "opensky-stale",
           center: area.center,
           radiusMiles: area.radiusMiles,
           flights: cachedFlights
         },
-        { status: 200 }
+        { cacheControl: STALE_CACHE_HEADER }
       );
     }
 
-    return NextResponse.json(
+    return jsonResponse(
       {
         source: "opensky-unavailable",
         center: area.center,
         radiusMiles: area.radiusMiles,
         flights: []
       },
-      { status: 200 }
+      { status: 503, cacheControl: ERROR_CACHE_HEADER }
     );
   }
 }

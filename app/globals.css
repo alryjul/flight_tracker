@@ -190,10 +190,18 @@ select {
   font-size: 0.86rem;
 }
 
-.area-field input:focus {
-  outline: 2px solid rgba(15, 76, 129, 0.16);
-  outline-offset: 0;
+.area-field input:focus-visible {
+  outline: 2px solid rgba(15, 76, 129, 0.34);
+  outline-offset: 1px;
   border-color: rgba(15, 76, 129, 0.34);
+}
+
+button:focus-visible,
+.flight-list-item:focus-visible,
+.area-actions button:focus-visible,
+.area-flyout-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .area-actions {
@@ -794,5 +802,35 @@ select {
 
   .strip-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Why: backdrop-filter degrades to a transparent overlay on browsers that
+   don't support it (older Safari, some Firefox configs). Bump background
+   opacity so text stays legible without the blur effect. */
+@supports not (backdrop-filter: blur(1px)) {
+  .hero-panel {
+    background: rgba(250, 247, 241, 0.94);
+  }
+
+  .map-panel,
+  .flight-card-stack {
+    background: rgba(255, 255, 255, 0.96);
+  }
+
+  .area-flyout-toggle,
+  .map-hover-card {
+    background: rgba(255, 255, 255, 0.96);
   }
 }
