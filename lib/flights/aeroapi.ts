@@ -26,11 +26,13 @@ const OPERATOR_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 // Why: 6 = batch ceiling on the immediate fetch path. MAX_IMMEDIATE is
 // the actual immediate-batch size, currently 2.
 const MAX_FEED_METADATA_LOOKUPS = 6;
-// Why: 1 → 3 was too aggressive for personal-tier daily quotas with the
-// volume of GA in WeHo airspace. Pulled back to 2 — top-2 strip cards
-// still get an immediate fetch on appearance, but per-poll burn is
-// 33% lower than at 3.
-const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 2;
+// Why: AeroAPI's rate-limiting is per-minute and tighter than we initially
+// estimated. At 4 s polling, MAX_IMMEDIATE × 15 = burst calls/min from
+// the immediate path alone (excluding queue drain and selected-flight
+// detail). Pulled back to 1 — top-1 strip card still gets a sync fetch
+// on appearance, queue drain handles the rest. Total worst-case burst
+// from feed warming: 15/min immediate + 12/min drain ≈ 27/min.
+const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 1;
 // Why: 10 → 6. AeroAPI's rate-limiting is per-minute, not daily, so
 // burst-control matters more than long-run total. A smaller warm target
 // keeps the queue shorter and reduces per-minute pressure during fresh-
