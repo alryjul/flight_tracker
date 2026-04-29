@@ -5,6 +5,7 @@ import {
   primeAeroApiFeedMetadata
 } from "@/lib/flights/aeroapi";
 import { fetchAdsbdbSelectedMetadata } from "@/lib/flights/adsbdb";
+import { fetchAdsbLolSelectedFlightTrack } from "@/lib/flights/adsblol";
 import { fetchOpenSkySelectedFlightTrack } from "@/lib/flights/openskyTrack";
 import type { Flight } from "@/lib/flights/types";
 
@@ -118,11 +119,15 @@ export async function GET(request: NextRequest) {
 
   try {
     const aeroApiAvailable = hasAeroApiCredentials();
-    const [details, adsbdbMetadata, openSkyTrack] = await Promise.all([
+    const [details, adsbdbMetadata, adsbLolTrack, openSkyTrack] = await Promise.all([
       aeroApiAvailable
         ? fetchAeroApiSelectedFlightDetails(flight, { bypassCache })
         : Promise.resolve(null),
       fetchAdsbdbSelectedMetadata(flight),
+      fetchAdsbLolSelectedFlightTrack(flight.id).catch((error) => {
+        console.error("Failed to load adsb.lol selected flight track", error);
+        return [];
+      }),
       fetchOpenSkySelectedFlightTrack(flight.id).catch((error) => {
         console.error("Failed to load OpenSky selected flight track fallback", error);
         return [];
@@ -148,7 +153,19 @@ export async function GET(request: NextRequest) {
       trustedAeroApiMetadata != null ||
       adsbdbMetadata != null ||
       aeroApiTrack.length > 0 ||
+      adsbLolTrack.length > 0 ||
       openSkyTrack.length > 0;
+
+    // Why: track-source priority — AeroAPI (comprehensive, departure-to-now,
+    // but doesn't index much GA) > adsb.lol (community ADS-B, broad GA
+    // coverage, recent-only ~3-10 min) > OpenSky `/tracks/all` (sparse,
+    // often 404 for GA). Pick the first that returned points.
+    const selectedTrack =
+      aeroApiTrack.length > 0
+        ? aeroApiTrack
+        : adsbLolTrack.length > 0
+          ? adsbLolTrack
+          : openSkyTrack;
 
     const mergedDetails = !hasAnyData
       ? null
@@ -183,17 +200,25 @@ export async function GET(request: NextRequest) {
             adsbdbMetadata?.registeredOwner ??
             flight.registeredOwner,
           status: trustedAeroApiMetadata?.status ?? null,
-          track: aeroApiTrack.length > 0 ? aeroApiTrack : openSkyTrack
+          track: selectedTrack
         };
 
-    const trackSource: "aeroapi" | "opensky-track" | "none" =
-      aeroApiTrack.length > 0 ? "aeroapi" : openSkyTrack.length > 0 ? "opensky-track" : "none";
+    const trackSource: "aeroapi" | "adsblol" | "opensky-track" | "none" =
+      aeroApiTrack.length > 0
+        ? "aeroapi"
+        : adsbLolTrack.length > 0
+          ? "adsblol"
+          : openSkyTrack.length > 0
+            ? "opensky-track"
+            : "none";
 
     function describeSource() {
       if (mergedDetails == null) return "unavailable";
       if (trustedAeroApiMetadata?.faFlightId) return "aeroapi";
       if (adsbdbMetadata && trackSource === "aeroapi") return "aeroapi+adsbdb";
+      if (adsbdbMetadata && trackSource === "adsblol") return "adsblol+adsbdb";
       if (adsbdbMetadata) return "adsbdb-fallback";
+      if (trackSource === "adsblol") return "adsblol-track-fallback";
       if (trackSource === "opensky-track") return "opensky-track-fallback";
       return "aeroapi";
     }
@@ -227,13 +252,17 @@ export async function GET(request: NextRequest) {
     console.error("Failed to load selected AeroAPI flight details", error);
 
     try {
-      const [adsbdbMetadata, openSkyTrack] = await Promise.all([
+      const [adsbdbMetadata, adsbLolTrack, openSkyTrack] = await Promise.all([
         fetchAdsbdbSelectedMetadata(flight),
+        fetchAdsbLolSelectedFlightTrack(flight.id).catch(() => []),
         fetchOpenSkySelectedFlightTrack(flight.id)
       ]);
 
+      const fallbackTrack =
+        adsbLolTrack.length > 0 ? adsbLolTrack : openSkyTrack;
+
       const fallbackDetails =
-        adsbdbMetadata || openSkyTrack.length > 0
+        adsbdbMetadata || fallbackTrack.length > 0
           ? {
               aircraftType: adsbdbMetadata?.aircraftType ?? flight.aircraftType,
               airline:
@@ -250,7 +279,7 @@ export async function GET(request: NextRequest) {
               registration: adsbdbMetadata?.registration ?? flight.registration,
               registeredOwner: adsbdbMetadata?.registeredOwner ?? flight.registeredOwner,
               status: null,
-              track: openSkyTrack
+              track: fallbackTrack
             }
           : null;
 
@@ -260,9 +289,11 @@ export async function GET(request: NextRequest) {
           source:
             adsbdbMetadata != null
               ? "adsbdb-fallback"
-              : openSkyTrack.length > 0
-                ? "opensky-track-fallback"
-                : "aeroapi-error"
+              : adsbLolTrack.length > 0
+                ? "adsblol-track-fallback"
+                : openSkyTrack.length > 0
+                  ? "opensky-track-fallback"
+                  : "aeroapi-error"
         },
         {
           status: fallbackDetails == null ? 502 : 200,
