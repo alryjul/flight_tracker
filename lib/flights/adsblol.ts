@@ -9,7 +9,7 @@ import type { Flight } from "@/lib/flights/types";
 import { distanceBetweenPointsMiles } from "@/lib/geo";
 
 // Why: adsb.lol exposes a community-fed ADS-B trace at
-// `https://globe.adsb.lol/data/traces/<bucket>/trace_recent_<icao>.json`,
+// `https://globe.adsb.lol/data/traces/<bucket>/trace_full_<icao>.json`,
 // where bucket is the last two hex characters of the icao24. Coverage
 // for GA is significantly better than OpenSky's `/tracks/all` because
 // volunteer feeders pick up low-altitude and uncontrolled-airspace
@@ -18,15 +18,22 @@ import { distanceBetweenPointsMiles } from "@/lib/geo";
 // The trace is the readsb/tar1090 format: an array of point arrays,
 // each `[seconds_since_base_ts, lat, lon, alt_ft|"ground", gs_kt,
 // track_deg, flags, vert_rate, ext_obj_or_null, source_or_null]`.
-// We pull the `recent` variant (a few minutes of history, ~3-10KB)
-// rather than the `full` variant (whole-day, often >100KB) since the
-// in-app trail only needs near-time history.
+// We pull the `full` variant (whole-day, ~100-200 KB) and prune to
+// the *current leg only* — see isolateCurrentLeg below. This gives
+// the user the entire flight from departure even if they tuned in
+// mid-route, while excluding earlier legs the same airframe flew
+// today (a short-haul jet may do 4 legs in a day; we want the one
+// it's on now).
 
 const ADSBLOL_TRACE_BASE = "https://globe.adsb.lol/data/traces";
 const ADSBLOL_TRACE_TTL_MS = 1000 * 60 * 2;
 const ADSBLOL_TRACE_NULL_TTL_MS = 1000 * 60 * 5;
 const ADSBLOL_TRACE_CACHE_MAX_ENTRIES = 500;
 const ADSBLOL_RATE_LIMIT_COOLDOWN_MS = 1000 * 30;
+// Why: 15 min on the ground (or below 100 ft + < 35 kt) between active
+// segments marks a leg break. A normal landing rollout / brief taxi
+// is well under 15 min; a between-leg parking stop is well over.
+const ADSBLOL_LEG_BREAK_THRESHOLD_SEC = 15 * 60;
 
 type CacheEntry = {
   expiresAt: number;
@@ -83,11 +90,60 @@ function getBucket(icao24: string) {
   return icao24.slice(-2);
 }
 
+function isStationaryTracePoint(point: AdsbLolTracePoint) {
+  const [, , , altitude, groundspeed] = point;
+  const onGroundOrLow =
+    altitude === "ground" ||
+    (typeof altitude === "number" && Number.isFinite(altitude) && altitude < 100);
+  const slow =
+    typeof groundspeed !== "number" ||
+    !Number.isFinite(groundspeed) ||
+    groundspeed < 35;
+  return onGroundOrLow && slow;
+}
+
+// Why: trace_full covers the entire UTC day. For an airframe that's flown
+// multiple legs today, we only want the *current* leg's path. Walk the trace
+// forward; whenever we see a stationary segment >= ADSBLOL_LEG_BREAK_THRESHOLD_SEC
+// followed by an active point, treat that active point as the start of a
+// new leg. The most recent such leg start is where we slice from.
+function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
+  if (trace.length === 0) return trace;
+
+  let lastLegStartIdx = 0;
+  let stationaryStartIdx: number | null = null;
+
+  for (let i = 0; i < trace.length; i += 1) {
+    const point = trace[i]!;
+    const isStationary = isStationaryTracePoint(point);
+
+    if (isStationary) {
+      if (stationaryStartIdx === null) {
+        stationaryStartIdx = i;
+      }
+      continue;
+    }
+
+    if (stationaryStartIdx !== null) {
+      const stationaryDurationSec = point[0] - trace[stationaryStartIdx]![0];
+      if (stationaryDurationSec >= ADSBLOL_LEG_BREAK_THRESHOLD_SEC) {
+        // Takeoff after sustained ground period — this is a fresh leg.
+        lastLegStartIdx = i;
+      }
+      stationaryStartIdx = null;
+    }
+  }
+
+  return lastLegStartIdx === 0 ? trace : trace.slice(lastLegStartIdx);
+}
+
 function convertTrace(response: AdsbLolTraceResponse): SelectedFlightTrackPoint[] {
   const baseSec = response.timestamp;
   if (!Number.isFinite(baseSec)) return [];
 
-  return response.trace
+  const currentLeg = isolateCurrentLeg(response.trace);
+
+  return currentLeg
     .map((point) => {
       const [offsetSec, latitude, longitude, altitude, groundspeed, heading] = point;
       if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
@@ -131,7 +187,7 @@ export async function fetchAdsbLolSelectedFlightTrack(icao24: string): Promise<S
   }
 
   const request = (async (): Promise<SelectedFlightTrackPoint[]> => {
-    const url = `${ADSBLOL_TRACE_BASE}/${getBucket(normalized)}/trace_recent_${normalized}.json`;
+    const url = `${ADSBLOL_TRACE_BASE}/${getBucket(normalized)}/trace_full_${normalized}.json`;
     const response = await fetch(url, {
       cache: "no-store",
       // Why: adsb.lol's CDN serves these files gzipped; node-fetch handles

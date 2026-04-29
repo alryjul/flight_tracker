@@ -156,16 +156,28 @@ export async function GET(request: NextRequest) {
       adsbLolTrack.length > 0 ||
       openSkyTrack.length > 0;
 
-    // Why: track-source priority — AeroAPI (comprehensive, departure-to-now,
-    // but doesn't index much GA) > adsb.lol (community ADS-B, broad GA
-    // coverage, recent-only ~3-10 min) > OpenSky `/tracks/all` (sparse,
-    // often 404 for GA). Pick the first that returned points.
-    const selectedTrack =
-      aeroApiTrack.length > 0
-        ? aeroApiTrack
-        : adsbLolTrack.length > 0
-          ? adsbLolTrack
-          : openSkyTrack;
+    // Why: pick whichever track source has the most points for the current
+    // leg. AeroAPI is high-quality but can be sparse (e.g., a flight that
+    // just departed has only a few recorded positions). adsb.lol's
+    // trace_full is pruned to the current leg by isolateCurrentLeg, so it
+    // gives full departure-to-now coverage when the flight path is within
+    // volunteer feeder coverage. OpenSky is sparse fallback. Picking the
+    // longest track avoids surfacing a 3-point AeroAPI sample when adsb.lol
+    // already has a comprehensive 200-point trail of the same flight.
+    let selectedTrack: typeof aeroApiTrack = [];
+    let selectedTrackProvider: "aeroapi" | "adsblol" | "opensky-track" | "none" = "none";
+    if (aeroApiTrack.length >= selectedTrack.length) {
+      selectedTrack = aeroApiTrack;
+      selectedTrackProvider = aeroApiTrack.length > 0 ? "aeroapi" : selectedTrackProvider;
+    }
+    if (adsbLolTrack.length > selectedTrack.length) {
+      selectedTrack = adsbLolTrack;
+      selectedTrackProvider = "adsblol";
+    }
+    if (openSkyTrack.length > selectedTrack.length) {
+      selectedTrack = openSkyTrack;
+      selectedTrackProvider = "opensky-track";
+    }
 
     const mergedDetails = !hasAnyData
       ? null
@@ -204,13 +216,7 @@ export async function GET(request: NextRequest) {
         };
 
     const trackSource: "aeroapi" | "adsblol" | "opensky-track" | "none" =
-      aeroApiTrack.length > 0
-        ? "aeroapi"
-        : adsbLolTrack.length > 0
-          ? "adsblol"
-          : openSkyTrack.length > 0
-            ? "opensky-track"
-            : "none";
+      selectedTrackProvider;
 
     function describeSource() {
       if (mergedDetails == null) return "unavailable";
