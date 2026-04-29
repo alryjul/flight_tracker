@@ -16,13 +16,12 @@ const FEED_METADATA_TTL_MS = 1000 * 60 * 60 * 2;
 // Why: misses (AeroAPI returned no current match) are *transient* — the
 // flight may not yet be indexed, or our scoring may have rejected
 // candidates. Caching the null answer for 2h would suppress route
-// enrichment for the rest of the aircraft's time in view. 30 min for
-// the feed path matches the click-path's GA_DETAIL_NULL_TTL_MS — an
-// unfiled VFR GA isn't going to suddenly file a plan mid-flight, so
-// re-asking AeroAPI every 5 min was burning daily quota for nothing.
-// (Previously 5 min — caused real rate-limit exhaustion in WeHo airspace
-// where ~30 unfiled GA aircraft are visible at any time.)
-const FEED_METADATA_NULL_TTL_MS = 1000 * 60 * 30;
+// enrichment for the rest of the aircraft's time in view. Use a short
+// TTL so we re-attempt soon — AeroAPI gates per-minute (not per-day), and
+// the burst-control levers (WARM_TARGET=6, MAX_IMMEDIATE=2,
+// SPACING=5s) handle rate, so the cost of re-asking is bounded by those
+// caps rather than by the TTL.
+const FEED_METADATA_NULL_TTL_MS = 1000 * 60 * 5;
 const OPERATOR_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 // Why: 6 = batch ceiling on the immediate fetch path. MAX_IMMEDIATE is
 // the actual immediate-batch size, currently 2.
