@@ -1718,6 +1718,13 @@ export function FlightMap() {
   const activeSelectedFlightDetailsRef = useRef<SelectedFlightDetailsResponse["details"]>(null);
   const selectedFlightDetailsFlightIdRef = useRef<string | null>(null);
   const selectedFlightDetailsIdentityKeyRef = useRef<string | null>(null);
+  // Why: the RAF runs independently of React's effect cycle. When the user
+  // clicks a new flight, selectedFlightDetailsFlightIdRef can lag behind by
+  // a frame or two — long enough to clear the trail to empty. Mirror the
+  // metadata cache so the RAF can fall back to it when the live ref is stale.
+  const selectedMetadataByIdRef = useRef<
+    Record<string, IdentityScopedValue<SelectedFlightDetailsResponse["details"]>>
+  >({});
   const selectedFlightIdRef = useRef<string | null>(null);
   const selectedRenderedPositionRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const homeBaseFeatures = useMemo(() => buildHomeBaseFeatures(homeBase), [homeBase]);
@@ -2722,6 +2729,10 @@ export function FlightMap() {
   }, [selectedFlightId]);
 
   useEffect(() => {
+    selectedMetadataByIdRef.current = selectedMetadataById;
+  }, [selectedMetadataById]);
+
+  useEffect(() => {
     hoveredStripFlightIdRef.current = hoveredStripFlightId;
   }, [hoveredStripFlightId]);
 
@@ -2871,32 +2882,29 @@ export function FlightMap() {
       const stripHoverStrokeOpacity = 0.72 * (1 - stripHoverEchoPhase);
       let selectedRenderedPosition: { latitude: number; longitude: number } | null = null;
       const playbackFlights = displayFlightsRef.current;
-      const selectedPlaybackFlight =
-        selectedFlightIdRef.current == null
-          ? null
-          : playbackFlights.find((flight) => flight.id === selectedFlightIdRef.current) ?? null;
-      // Why: track validity hinges on the physical aircraft (icao24), not the
-      // displayed callsign — a transient callsign flicker shouldn't blank
-      // the trail. Metadata invalidation still happens at the identity-key
-      // layer; this check is just "is the cached track for this airframe?"
+      const selectedId = selectedFlightIdRef.current;
+      // Why: trail logic depends on the SELECTION (id), not whether the flight
+      // is currently in displayFlights. A poll can momentarily drop a flight
+      // we have selected; we still want to keep showing its cached track and
+      // breadcrumbs. The icon position falls back to undefined and is handled
+      // by getSanitizedTrackCoordinates (which simply skips the live tail).
       const activeSelectedTrack =
-        selectedPlaybackFlight != null &&
-        selectedFlightDetailsFlightIdRef.current === selectedPlaybackFlight.id
-          ? activeSelectedFlightDetailsRef.current
-          : null;
+        selectedId == null
+          ? null
+          : selectedFlightDetailsFlightIdRef.current === selectedId
+            ? activeSelectedFlightDetailsRef.current
+            : selectedMetadataByIdRef.current[selectedId]?.value ?? null;
       const selectedAnimationState =
-        selectedPlaybackFlight == null
-          ? undefined
-          : animationStates.get(selectedPlaybackFlight.id);
+        selectedId == null ? undefined : animationStates.get(selectedId);
       const selectedDisplayedProviderTimestampMs = getDisplayedProviderTimestampMs(
         selectedAnimationState,
         frameTime
       );
       const activeBreadcrumbPoints =
-        selectedPlaybackFlight == null
+        selectedId == null
           ? []
           : clipBreadcrumbCoordinatesToAnimation(
-              getBreadcrumbPoints(playbackSnapshots, selectedPlaybackFlight.id),
+              getBreadcrumbPoints(playbackSnapshots, selectedId),
               selectedAnimationState,
               frameTime
             );
@@ -2966,29 +2974,33 @@ export function FlightMap() {
 
   useEffect(() => {
     const source = mapRef.current?.getSource("selected-track") as GeoJSONSource | undefined;
-    const selectedPlaybackFlight =
-      selectedFlightIdRef.current == null
-        ? null
-        : currentFlightsRef.current.find((flight) => flight.id === selectedFlightIdRef.current) ?? null;
+    const selectedId = selectedFlightIdRef.current;
+    // Why: gate on the selection itself, not on whether the flight is in the
+    // current poll. A just-clicked flight may not be in `currentFlightsRef`
+    // (it could be a remembered/lingering flight, or the latest poll dropped
+    // it), and a poll could swap `currentFlightsRef` between click and this
+    // effect — both used to clear the trail to empty. Trust the cached track
+    // for the selected id and let breadcrumbs persist independently.
     const activeSelectedTrack =
-      selectedPlaybackFlight != null &&
-      selectedFlightDetailsFlightIdRef.current === selectedPlaybackFlight.id
-        ? activeSelectedFlightDetails
+      selectedId != null
+        ? activeSelectedFlightDetails ??
+          (selectedMetadataByIdRef.current[selectedId]?.value ?? null)
         : null;
-
+    const selectedAnimationState =
+      selectedId != null ? flightAnimationStatesRef.current.get(selectedId) : undefined;
     const selectedDisplayedProviderTimestampMs = getDisplayedProviderTimestampMs(
-      flightAnimationStatesRef.current.get(selectedPlaybackFlight?.id ?? ""),
+      selectedAnimationState,
       performance.now()
     );
 
     setSelectedTrackSourceData(
       source,
       activeSelectedTrack,
-      selectedPlaybackFlight == null
+      selectedId == null
         ? []
         : clipBreadcrumbCoordinatesToAnimation(
-            getBreadcrumbPoints(snapshotHistoryRef.current, selectedPlaybackFlight.id),
-            flightAnimationStatesRef.current.get(selectedPlaybackFlight.id),
+            getBreadcrumbPoints(snapshotHistoryRef.current, selectedId),
+            selectedAnimationState,
             performance.now()
           ),
       selectedRenderedPositionRef.current,
