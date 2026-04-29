@@ -891,22 +891,28 @@ function hashTrackCoordinates(coordinates: [number, number][]) {
 
 const trackSourceLastHashBySource = new WeakMap<GeoJSONSource, string>();
 
+// Why: track the selection that's currently drawn on the source. When the
+// user clicks a NEW flight, we want to clear the previous flight's trail
+// (otherwise it visually persists under the new icon). But within the SAME
+// selection, we want to preserve whatever was last drawn even if a recompute
+// transiently produces fewer than 2 coordinates — that's how we avoid the
+// flash-and-disappear pattern between click and fetch return.
+const trackSourceLastSelectionId = new WeakMap<GeoJSONSource, string | null>();
+
 function setSelectedTrackSourceData(
   source: GeoJSONSource | undefined,
+  selectionId: string | null,
   track: SelectedFlightDetailsResponse["details"] | null,
   breadcrumbPoints: BreadcrumbPoint[],
   renderedPosition: { latitude: number; longitude: number } | null,
-  displayedProviderTimestampMs: number | null,
-  // Why: when this is `false` we refuse to wipe the source mid-selection.
-  // The trail then persists across the gap between click and fetch-return,
-  // so the user never sees the trail "flash and disappear" before the
-  // robust AeroAPI track lands. Callers pass `true` only when the
-  // selection is intentionally being cleared.
-  allowEmpty = false
+  displayedProviderTimestampMs: number | null
 ) {
   if (!source) {
     return;
   }
+
+  const lastSelectionId = trackSourceLastSelectionId.get(source) ?? null;
+  const isSelectionChange = lastSelectionId !== selectionId;
 
   const coordinates = getSanitizedTrackCoordinates(
     track,
@@ -915,15 +921,22 @@ function setSelectedTrackSourceData(
     displayedProviderTimestampMs
   );
 
-  if (coordinates.length < 2 && !allowEmpty) {
+  // Within the same selection, refuse to wipe the trail: a transient empty
+  // recompute (e.g., breadcrumbs collapsed to a single dedup'd point while
+  // we wait for the fetch to land) shouldn't erase what was last drawn.
+  if (coordinates.length < 2 && !isSelectionChange) {
     return;
   }
 
   const nextHash = hashTrackCoordinates(coordinates);
-  if (trackSourceLastHashBySource.get(source) === nextHash) {
+  if (
+    !isSelectionChange &&
+    trackSourceLastHashBySource.get(source) === nextHash
+  ) {
     return;
   }
   trackSourceLastHashBySource.set(source, nextHash);
+  trackSourceLastSelectionId.set(source, selectionId);
 
   source.setData({
     type: "FeatureCollection",
@@ -946,6 +959,7 @@ function setSelectedTrackSourceData(
 function clearSelectedTrackSource(source: GeoJSONSource | undefined) {
   if (!source) return;
   trackSourceLastHashBySource.set(source, "0");
+  trackSourceLastSelectionId.set(source, null);
   source.setData({ type: "FeatureCollection", features: [] });
 }
 
@@ -2971,6 +2985,7 @@ export function FlightMap() {
       } else {
         setSelectedTrackSourceData(
           trackSource,
+          selectedId,
           activeSelectedTrack,
           activeBreadcrumbPoints,
           selectedRenderedPosition,
@@ -3018,6 +3033,7 @@ export function FlightMap() {
 
     setSelectedTrackSourceData(
       source,
+      selectedId,
       activeSelectedTrack,
       clipBreadcrumbCoordinatesToAnimation(
         getBreadcrumbPoints(snapshotHistoryRef.current, selectedId),
