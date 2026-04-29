@@ -219,6 +219,18 @@ function getAeroApiHeaders() {
   };
 }
 
+// Why: when an aircraft takes off from or lands at a non-airport location
+// (heliport, field, ad-hoc spot — common for LAPD/news helos, medevac,
+// charter), AeroAPI emits the origin/destination as a lat/lon pseudo-code
+// in the `code` field, formatted "L <lat> <lon>" (e.g., "L 34.15752 -118.20980").
+// The IATA/ICAO fields are null in this case. Surfacing that raw string in
+// the UI as "From L 34.15752 -118.20980" is unhelpful — it's not an airport
+// the user can look up. Strip it; the route fallback ("VFR" / "Route
+// pending") is more honest about what we know.
+function isLatLonPseudoCode(code: string) {
+  return /^L\s+-?\d+(\.\d+)?\s+-?\d+(\.\d+)?$/.test(code.trim());
+}
+
 function normalizeAirportCode(input: {
   code: string | null;
   code_iata: string | null;
@@ -227,8 +239,8 @@ function normalizeAirportCode(input: {
   if (!input) {
     return null;
   }
-
-  return input.code_iata || input.code_icao || input.code || null;
+  const fallback = input.code && !isLatLonPseudoCode(input.code) ? input.code : null;
+  return input.code_iata || input.code_icao || fallback || null;
 }
 
 function normalizedUpper(value: string | null | undefined) {
