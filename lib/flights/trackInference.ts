@@ -13,12 +13,22 @@ import { distanceBetweenPointsMiles } from "@/lib/geo";
 const TAKEOFF_MAX_ALTITUDE_FT = 1500;
 const TAKEOFF_MAX_GROUNDSPEED_KT = 80;
 
-// Why: 0.3 mi ≈ a typical airport perimeter / runway-to-edge distance.
-// Generous enough that the first usable trace point — which usually
-// sits a few hundred meters past the runway end — still matches; tight
-// enough that the helicopter that lifted off from a downtown building
-// doesn't get false-attributed to the nearest airport.
-const AIRPORT_MATCH_RADIUS_MILES = 0.3;
+// Why: a takeoff trace's first leg-pruned point is rarely the runway
+// itself — adsb.lol coverage tends to kick in once the aircraft is
+// already in the climbout phase, typically 0.5-2 mi from the airport
+// reference point at 500-1000 ft AGL. 0.3 mi was way too tight (saw
+// N241TD lift off from KSMO get geocoded to "Venice" because the
+// first post-gap point was 0.79 mi south of the field).
+//
+// 2.0 mi gives comfortable coverage:
+//   • Catches climbout from any LA-area airport (KSMO, KBUR, KVNY,
+//     KHHR, KLAX, KSNA, KCMA, etc.)
+//   • Stays well clear of the next-nearest airport (LA's airports
+//     are 5+ mi apart, so no false attribution)
+//   • Combined with the takeoff guard (alt ≤ 1500 ft, gs ≤ 80 kt),
+//     prevents a flight overhead at cruise from getting nailed to
+//     a random nearby airport
+const AIRPORT_MATCH_RADIUS_MILES = 2.0;
 
 function looksLikeTakeoff(point: SelectedFlightTrackPoint): boolean {
   const altOk =
