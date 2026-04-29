@@ -96,6 +96,7 @@ type IdentityScopedValue<T> = {
 };
 
 const refreshMs = 4000;
+const HIDDEN_TAB_REFRESH_MS = 30_000;
 const PROXIMITY_RING_MILES = [3, 8];
 const HOME_BASE_STORAGE_KEY = "flight-tracker-home-base";
 const VISIBLE_FLIGHT_LIMIT = 50;
@@ -654,15 +655,24 @@ function isValidTrackCoordinate(coordinate: [number, number]) {
   );
 }
 
+// Why: a single teleport point (antenna handoff, stale ICAO assignment,
+// transient garbage) used to nuke the entire accumulated trail. Now we
+// drop the bad point and keep going. Only after CONSECUTIVE_TELEPORTS_TO_RESET
+// bad points in a row do we treat it as a real trajectory discontinuity
+// (e.g., wraparound, ICAO reassigned to a flight halfway across the world).
+const CONSECUTIVE_TELEPORTS_TO_RESET = 3;
+
 function sanitizeCoordinateSequence(coordinates: [number, number][]) {
   const dedupedCoordinates = dedupeCoordinates(coordinates.filter(isValidTrackCoordinate));
   const sanitizedCoordinates: [number, number][] = [];
+  let consecutiveTeleports = 0;
 
   for (const coordinate of dedupedCoordinates) {
     const previousCoordinate = sanitizedCoordinates[sanitizedCoordinates.length - 1];
 
     if (!previousCoordinate) {
       sanitizedCoordinates.push(coordinate);
+      consecutiveTeleports = 0;
       continue;
     }
 
@@ -673,27 +683,33 @@ function sanitizeCoordinateSequence(coordinates: [number, number][]) {
       toLongitude: coordinate[0]
     });
     const longitudeDelta = Math.abs(coordinate[0] - previousCoordinate[0]);
+    const isTeleport = longitudeDelta > 120 || segmentMiles > MAX_TRACK_SEGMENT_MILES;
 
-    if (longitudeDelta > 120 || segmentMiles > MAX_TRACK_SEGMENT_MILES) {
-      sanitizedCoordinates.length = 0;
-      sanitizedCoordinates.push(coordinate);
+    if (isTeleport) {
+      consecutiveTeleports += 1;
+      if (consecutiveTeleports >= CONSECUTIVE_TELEPORTS_TO_RESET) {
+        sanitizedCoordinates.length = 0;
+        sanitizedCoordinates.push(coordinate);
+        consecutiveTeleports = 0;
+      }
       continue;
     }
 
     sanitizedCoordinates.push(coordinate);
+    consecutiveTeleports = 0;
   }
 
   return sanitizedCoordinates;
 }
 
-function getBreadcrumbPoints(
-  snapshots: FlightSnapshot[],
-  flightId: string,
-  identityKey: string
-) {
+// Why: only filter by physical id (icao24). Callsign changes mid-session
+// (Mode-S transponder updates, ATC re-coding) used to drop pre-change
+// breadcrumbs from the trail even though they were the same physical
+// aircraft. ICAO24 is permanent per airframe; the callsign is metadata.
+function getBreadcrumbPoints(snapshots: FlightSnapshot[], flightId: string) {
   const points = snapshots
     .map((snapshot) => snapshot.flightsById.get(flightId))
-    .filter((flight): flight is Flight => flight != null && getLiveFlightIdentityKey(flight) === identityKey)
+    .filter((flight): flight is Flight => flight != null)
     .map((flight) => ({
       coordinate: [flight.longitude, flight.latitude] as [number, number],
       providerTimestampSec: getFlightProviderTimestampSec(flight)
@@ -722,40 +738,45 @@ function getBreadcrumbPoints(
   return breadcrumbs;
 }
 
+// Why: previously this function applied the `displayedProviderTimestampMs`
+// (the playback aircraft's interpolated position-time) as an upper bound on
+// every coordinate considered. In practice that culls AeroAPI track points
+// captured between OpenSky polls — exactly the freshest segment users want
+// to see — and causes the trail to flicker as animation progress crosses the
+// boundary. The trail is the *historical record*; the icon is its own
+// concern. They're allowed to disagree by a few seconds.
+//
+// Pipeline:
+//   1. Sanitize provider track points (drop teleports, dedupe).
+//   2. Append breadcrumbs collected client-side that fall AFTER the provider
+//      track's last timestamp (avoids duplicating points; bridges the gap
+//      between AeroAPI's track and the live present).
+//   3. Append the live (interpolated) aircraft position as the visual tail —
+//      but only when the trail's last data point is older than the icon's
+//      playback time, otherwise we'd backtrack from a fresh trail tip to a
+//      lagging icon position.
 function getSanitizedTrackCoordinates(
   track: SelectedFlightDetailsResponse["details"] | null,
   breadcrumbPoints: BreadcrumbPoint[],
   renderedPosition: { latitude: number; longitude: number } | null,
   displayedProviderTimestampMs: number | null
 ) {
+  const providerTrack = track?.track ?? [];
   const sanitizedCoordinates = sanitizeCoordinateSequence(
-    (track?.track ?? [])
-      .filter((point) => {
-        if (displayedProviderTimestampMs == null) {
-          return true;
-        }
-
-        const pointTimestampMs = Date.parse(point.timestamp);
-        return !Number.isFinite(pointTimestampMs) || pointTimestampMs <= displayedProviderTimestampMs;
-      })
-      .map((point) => [point.longitude, point.latitude] as [number, number])
+    providerTrack.map((point) => [point.longitude, point.latitude] as [number, number])
   );
-  const lastProviderTrackTimestampMs = getLastTrackTimestampMs(track?.track ?? []);
+  const lastProviderTrackTimestampMs = getLastTrackTimestampMs(providerTrack);
+
+  let trailEndTimestampMs = lastProviderTrackTimestampMs;
 
   if (breadcrumbPoints.length > 0) {
-    const breadcrumbCoordinates = breadcrumbPoints
-      .filter((point) =>
+    const eligibleBreadcrumbs = breadcrumbPoints.filter(
+      (point) =>
         lastProviderTrackTimestampMs == null ||
         point.providerTimestampSec == null ||
-        (
-          point.providerTimestampSec * 1000 > lastProviderTrackTimestampMs &&
-          (
-            displayedProviderTimestampMs == null ||
-            point.providerTimestampSec * 1000 <= displayedProviderTimestampMs
-          )
-        )
-      )
-      .map((point) => point.coordinate);
+        point.providerTimestampSec * 1000 > lastProviderTrackTimestampMs
+    );
+    const breadcrumbCoordinates = eligibleBreadcrumbs.map((point) => point.coordinate);
 
     if (sanitizedCoordinates.length === 0) {
       sanitizedCoordinates.push(...breadcrumbCoordinates);
@@ -763,6 +784,8 @@ function getSanitizedTrackCoordinates(
       const providerTail = sanitizedCoordinates[sanitizedCoordinates.length - 1]!;
       const trimmedBreadcrumbCoordinates = [...breadcrumbCoordinates];
 
+      // Skip breadcrumbs that overlap the provider tail (avoid duplicate
+      // coordinates packed inside the rendering tolerance).
       while (trimmedBreadcrumbCoordinates.length > 0) {
         const breadcrumbHead = trimmedBreadcrumbCoordinates[0]!;
         const connectorMiles = distanceBetweenPointsMiles({
@@ -794,9 +817,22 @@ function getSanitizedTrackCoordinates(
         }
       }
     }
+
+    const latestBreadcrumbTimestampSec = eligibleBreadcrumbs.reduce<number | null>(
+      (latest, point) =>
+        point.providerTimestampSec != null && (latest == null || point.providerTimestampSec > latest)
+          ? point.providerTimestampSec
+          : latest,
+      null
+    );
+    if (latestBreadcrumbTimestampSec != null) {
+      const breadcrumbMs = latestBreadcrumbTimestampSec * 1000;
+      trailEndTimestampMs =
+        trailEndTimestampMs == null ? breadcrumbMs : Math.max(trailEndTimestampMs, breadcrumbMs);
+    }
   }
 
-  if (sanitizedCoordinates.length < 2) {
+  if (sanitizedCoordinates.length < 2 && !renderedPosition) {
     return [];
   }
 
@@ -804,8 +840,26 @@ function getSanitizedTrackCoordinates(
     return sanitizedCoordinates;
   }
 
-  const lastCoordinate = sanitizedCoordinates[sanitizedCoordinates.length - 1]!;
+  const lastCoordinate = sanitizedCoordinates[sanitizedCoordinates.length - 1];
   const tailPoint: [number, number] = [renderedPosition.longitude, renderedPosition.latitude];
+
+  // Skip the live-tail append when the trail's last data point is fresher
+  // than the icon's playback time — appending the lagging icon position
+  // would draw a backwards segment from a fresh tip.
+  const trailIsAheadOfIcon =
+    trailEndTimestampMs != null &&
+    displayedProviderTimestampMs != null &&
+    trailEndTimestampMs > displayedProviderTimestampMs;
+
+  if (trailIsAheadOfIcon) {
+    return sanitizedCoordinates.length >= 2 ? sanitizedCoordinates : [];
+  }
+
+  if (!lastCoordinate) {
+    // Only the icon — can't draw a line from a single point. Bail.
+    return [];
+  }
+
   const tailSegmentMiles = distanceBetweenPointsMiles({
     fromLatitude: lastCoordinate[1],
     fromLongitude: lastCoordinate[0],
@@ -814,14 +868,14 @@ function getSanitizedTrackCoordinates(
   });
 
   if (tailSegmentMiles > MAX_TRACK_TO_AIRCRAFT_MILES) {
-    return sanitizedCoordinates;
+    return sanitizedCoordinates.length >= 2 ? sanitizedCoordinates : [];
   }
 
   if (lastCoordinate[0] !== tailPoint[0] || lastCoordinate[1] !== tailPoint[1]) {
     sanitizedCoordinates.push(tailPoint);
   }
 
-  return sanitizedCoordinates;
+  return sanitizedCoordinates.length >= 2 ? sanitizedCoordinates : [];
 }
 
 function hashTrackCoordinates(coordinates: [number, number][]) {
@@ -1640,6 +1694,7 @@ export function FlightMap() {
   const [flights, setFlights] = useState<Flight[]>([]);
   const [feedWarmEnabled, setFeedWarmEnabled] = useState(false);
   const feedWarmEnabledRef = useRef(feedWarmEnabled);
+  const pageVisibleRef = useRef(true);
   const [feedMetadataById, setFeedMetadataById] = useState<
     Record<string, IdentityScopedValue<AeroApiFeedMetadata>>
   >({});
@@ -1958,6 +2013,24 @@ export function FlightMap() {
   }, [homeBase, radiusMiles]);
 
   useEffect(() => {
+    // Why: when the tab is hidden the user can't see the map, so polling at
+    // 4s and warming AeroAPI metadata for ~10 flights every poll just burns
+    // upstream rate-limit budget for nothing. Pause warming and slow polling
+    // until they come back.
+    if (typeof document === "undefined") {
+      return;
+    }
+    const onVisibilityChange = () => {
+      pageVisibleRef.current = !document.hidden;
+    };
+    pageVisibleRef.current = !document.hidden;
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!containerRef.current || mapRef.current) {
       return;
     }
@@ -2243,7 +2316,8 @@ export function FlightMap() {
         longitude: String(homeBase.longitude),
         radiusMiles: String(radiusMiles)
       });
-      query.set("warmFeed", feedWarmEnabledRef.current ? "1" : "0");
+      const shouldWarmFeed = feedWarmEnabledRef.current && pageVisibleRef.current;
+      query.set("warmFeed", shouldWarmFeed ? "1" : "0");
       inFlightAbortController?.abort();
       inFlightAbortController = new AbortController();
       const response = await fetch(`/api/flights?${query.toString()}`, {
@@ -2327,7 +2401,8 @@ export function FlightMap() {
       } finally {
         if (!cancelled) {
           const elapsedMs = performance.now() - startedAt;
-          const nextDelayMs = Math.max(250, refreshMs - elapsedMs);
+          const targetMs = pageVisibleRef.current ? refreshMs : HIDDEN_TAB_REFRESH_MS;
+          const nextDelayMs = Math.max(250, targetMs - elapsedMs);
 
           nextPollTimeoutId = window.setTimeout(() => {
             void pollFlights();
@@ -2512,8 +2587,13 @@ export function FlightMap() {
         attemptIndex < SELECTED_ENRICHMENT_RETRY_DELAYS_MS.length &&
         shouldRetrySelectedFlightEnrichment(requestForSelection, data)
       ) {
+        // Why: only force `bypassCache` after the cache has had a real chance
+        // to refresh on its own (~the AeroAPI DETAIL_TTL of 2min). Earlier
+        // retries should let the server-side cache do its job — bypassing it
+        // burns AeroAPI quota without giving the upstream time to update.
+        const shouldBypassCache = attemptIndex >= 2;
         retryTimeoutId = window.setTimeout(() => {
-          void attemptSelectedFlightEnrichment(attemptIndex + 1, true);
+          void attemptSelectedFlightEnrichment(attemptIndex + 1, shouldBypassCache);
         }, SELECTED_ENRICHMENT_RETRY_DELAYS_MS[attemptIndex]);
       }
     }
@@ -2795,9 +2875,13 @@ export function FlightMap() {
         selectedFlightIdRef.current == null
           ? null
           : playbackFlights.find((flight) => flight.id === selectedFlightIdRef.current) ?? null;
+      // Why: track validity hinges on the physical aircraft (icao24), not the
+      // displayed callsign — a transient callsign flicker shouldn't blank
+      // the trail. Metadata invalidation still happens at the identity-key
+      // layer; this check is just "is the cached track for this airframe?"
       const activeSelectedTrack =
         selectedPlaybackFlight != null &&
-        selectedFlightDetailsIdentityKeyRef.current === getLiveFlightIdentityKey(selectedPlaybackFlight)
+        selectedFlightDetailsFlightIdRef.current === selectedPlaybackFlight.id
           ? activeSelectedFlightDetailsRef.current
           : null;
       const selectedAnimationState =
@@ -2812,11 +2896,7 @@ export function FlightMap() {
         selectedPlaybackFlight == null
           ? []
           : clipBreadcrumbCoordinatesToAnimation(
-              getBreadcrumbPoints(
-                playbackSnapshots,
-                selectedPlaybackFlight.id,
-                getLiveFlightIdentityKey(selectedPlaybackFlight)
-              ),
+              getBreadcrumbPoints(playbackSnapshots, selectedPlaybackFlight.id),
               selectedAnimationState,
               frameTime
             );
@@ -2892,7 +2972,7 @@ export function FlightMap() {
         : currentFlightsRef.current.find((flight) => flight.id === selectedFlightIdRef.current) ?? null;
     const activeSelectedTrack =
       selectedPlaybackFlight != null &&
-      selectedFlightDetailsIdentityKeyRef.current === getLiveFlightIdentityKey(selectedPlaybackFlight)
+      selectedFlightDetailsFlightIdRef.current === selectedPlaybackFlight.id
         ? activeSelectedFlightDetails
         : null;
 
@@ -2907,11 +2987,7 @@ export function FlightMap() {
       selectedPlaybackFlight == null
         ? []
         : clipBreadcrumbCoordinatesToAnimation(
-            getBreadcrumbPoints(
-              snapshotHistoryRef.current,
-              selectedPlaybackFlight.id,
-              getLiveFlightIdentityKey(selectedPlaybackFlight)
-            ),
+            getBreadcrumbPoints(snapshotHistoryRef.current, selectedPlaybackFlight.id),
             flightAnimationStatesRef.current.get(selectedPlaybackFlight.id),
             performance.now()
           ),

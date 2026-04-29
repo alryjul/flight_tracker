@@ -129,83 +129,93 @@ export async function GET(request: NextRequest) {
       })
     ]);
 
+    // Why: registration mismatch means our resolved AeroAPI flight record is
+    // probably not the right *aircraft* (different tail than what OpenSky/ADSBdb
+    // reports for this icao24). Don't surface its metadata. But the track
+    // points are physical positions for whatever flight AeroAPI did match —
+    // and we resolved that match via callsign + position + timing scoring.
+    // Most of the time it's still the right physical aircraft and the reg
+    // discrepancy is a stale registry record. Trust the track separately so a
+    // reg disagreement doesn't blank the trail.
     const aeroApiRegistrationMismatch =
       normalizedUpper(flight.registration) != null &&
       normalizedUpper(details?.registration) != null &&
       normalizedUpper(flight.registration) !== normalizedUpper(details?.registration);
-    const trustedAeroApiDetails = aeroApiRegistrationMismatch ? null : details;
+    const trustedAeroApiMetadata = aeroApiRegistrationMismatch ? null : details;
+    const aeroApiTrack = details?.track ?? [];
 
-    const mergedDetails =
-      trustedAeroApiDetails == null && adsbdbMetadata == null && openSkyTrack.length === 0
-        ? null
-        : {
-            aircraftType:
-              trustedAeroApiDetails?.aircraftType ??
-              adsbdbMetadata?.aircraftType ??
-              flight.aircraftType,
-            airline:
-              trustedAeroApiDetails?.airline ??
-              (flight.flightNumber == null ? adsbdbMetadata?.airline : null) ??
-              flight.airline,
-            destination:
-              trustedAeroApiDetails?.destination ??
-              (flight.flightNumber == null ? adsbdbMetadata?.destination : null) ??
-              flight.destination,
-            faFlightId: trustedAeroApiDetails?.faFlightId ?? null,
-            flightNumber:
-              trustedAeroApiDetails?.flightNumber ??
-              (flight.flightNumber == null ? adsbdbMetadata?.flightNumber : null) ??
-              flight.flightNumber,
-            origin:
-              trustedAeroApiDetails?.origin ??
-              (flight.flightNumber == null ? adsbdbMetadata?.origin : null) ??
-              flight.origin,
-            registration:
-              trustedAeroApiDetails?.registration ??
-              adsbdbMetadata?.registration ??
-              flight.registration,
-            registeredOwner:
-              trustedAeroApiDetails?.registeredOwner ??
-              adsbdbMetadata?.registeredOwner ??
-              flight.registeredOwner,
-            status: trustedAeroApiDetails?.status ?? null,
-            track: trustedAeroApiDetails?.track.length ? trustedAeroApiDetails.track : openSkyTrack
-          };
+    const hasAnyData =
+      trustedAeroApiMetadata != null ||
+      adsbdbMetadata != null ||
+      aeroApiTrack.length > 0 ||
+      openSkyTrack.length > 0;
+
+    const mergedDetails = !hasAnyData
+      ? null
+      : {
+          aircraftType:
+            trustedAeroApiMetadata?.aircraftType ??
+            adsbdbMetadata?.aircraftType ??
+            flight.aircraftType,
+          airline:
+            trustedAeroApiMetadata?.airline ??
+            (flight.flightNumber == null ? adsbdbMetadata?.airline : null) ??
+            flight.airline,
+          destination:
+            trustedAeroApiMetadata?.destination ??
+            (flight.flightNumber == null ? adsbdbMetadata?.destination : null) ??
+            flight.destination,
+          faFlightId: trustedAeroApiMetadata?.faFlightId ?? null,
+          flightNumber:
+            trustedAeroApiMetadata?.flightNumber ??
+            (flight.flightNumber == null ? adsbdbMetadata?.flightNumber : null) ??
+            flight.flightNumber,
+          origin:
+            trustedAeroApiMetadata?.origin ??
+            (flight.flightNumber == null ? adsbdbMetadata?.origin : null) ??
+            flight.origin,
+          registration:
+            trustedAeroApiMetadata?.registration ??
+            adsbdbMetadata?.registration ??
+            flight.registration,
+          registeredOwner:
+            trustedAeroApiMetadata?.registeredOwner ??
+            adsbdbMetadata?.registeredOwner ??
+            flight.registeredOwner,
+          status: trustedAeroApiMetadata?.status ?? null,
+          track: aeroApiTrack.length > 0 ? aeroApiTrack : openSkyTrack
+        };
+
+    const trackSource: "aeroapi" | "opensky-track" | "none" =
+      aeroApiTrack.length > 0 ? "aeroapi" : openSkyTrack.length > 0 ? "opensky-track" : "none";
+
+    function describeSource() {
+      if (mergedDetails == null) return "unavailable";
+      if (trustedAeroApiMetadata?.faFlightId) return "aeroapi";
+      if (adsbdbMetadata && trackSource === "aeroapi") return "aeroapi+adsbdb";
+      if (adsbdbMetadata) return "adsbdb-fallback";
+      if (trackSource === "opensky-track") return "opensky-track-fallback";
+      return "aeroapi";
+    }
 
     if (mergedDetails?.track.length) {
-      primeFeedMetadataFromTrustedAeroApiDetails(flight, trustedAeroApiDetails);
+      primeFeedMetadataFromTrustedAeroApiDetails(flight, trustedAeroApiMetadata);
 
       return jsonResponse(
-        {
-          details: mergedDetails,
-          source:
-            trustedAeroApiDetails?.faFlightId
-              ? "aeroapi"
-              : adsbdbMetadata
-                ? "aeroapi+adsbdb"
-                : "opensky-track-fallback"
-        },
+        { details: mergedDetails, source: describeSource(), trackSource },
         { cacheControl: SELECTED_FRESH_CACHE_HEADER }
       );
     }
 
     if (mergedDetails) {
-      primeFeedMetadataFromTrustedAeroApiDetails(flight, trustedAeroApiDetails);
+      primeFeedMetadataFromTrustedAeroApiDetails(flight, trustedAeroApiMetadata);
     }
 
     return jsonResponse(
       {
         details: mergedDetails,
-        source:
-          mergedDetails == null
-            ? "unavailable"
-            : trustedAeroApiDetails?.faFlightId
-              ? "aeroapi"
-              : adsbdbMetadata
-                ? "aeroapi+adsbdb"
-                : openSkyTrack.length > 0
-                  ? "opensky-track-fallback"
-                  : "aeroapi"
+        source: describeSource(),
+        trackSource
       },
       {
         status: mergedDetails == null ? 503 : 200,

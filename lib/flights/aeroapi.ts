@@ -3,12 +3,25 @@ import type { Flight } from "@/lib/flights/types";
 const AEROAPI_BASE_URL = "https://aeroapi.flightaware.com/aeroapi";
 const DETAIL_TTL_MS = 1000 * 60 * 2;
 const DETAIL_NULL_TTL_MS = 1000 * 20;
-const FEED_METADATA_TTL_MS = 1000 * 60 * 10;
+// Why: AeroAPI's flight database fundamentally doesn't index private GA
+// (N-reg etc.) Re-asking every 20s is pure waste and contributes to 429s.
+// Cache the null answer for much longer.
+const GA_DETAIL_NULL_TTL_MS = 1000 * 60 * 30;
+// Why: route metadata (origin/destination/airline/flight number) is
+// effectively immutable for the lifetime of a single flight. 10min meant
+// we re-warmed any flight that drifted off the visible strip and back —
+// pure waste. Bump to 2h so a flight stays cached through its whole
+// time in the area; LRU caps still bound total memory.
+const FEED_METADATA_TTL_MS = 1000 * 60 * 60 * 2;
 const OPERATOR_TTL_MS = 1000 * 60 * 60 * 24 * 7;
-const MAX_FEED_METADATA_LOOKUPS = 8;
-const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 2;
-const FEED_METADATA_WARM_TARGET = 10;
-const FEED_METADATA_REQUEST_SPACING_MS = 1000 * 6;
+// Why: tuned to stay well under typical AeroAPI rate limits (~10 req/min on
+// personal tiers). 6 warm targets * (60s / 8s spacing) = ~6 calls/min from
+// the warm queue, leaving headroom for selected-flight detail + retries
+// without triggering 429 cooldowns.
+const MAX_FEED_METADATA_LOOKUPS = 6;
+const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 1;
+const FEED_METADATA_WARM_TARGET = 6;
+const FEED_METADATA_REQUEST_SPACING_MS = 1000 * 8;
 const FEED_METADATA_RATE_LIMIT_COOLDOWN_MS = 1000 * 45;
 const DETAIL_RATE_LIMIT_COOLDOWN_MS = 1000 * 30;
 const RATE_LIMIT_NULL_TTL_MS = 1000 * 30;
@@ -450,27 +463,63 @@ function getPreferredFlightNumber(record: AeroApiFlightRecord) {
   return record.ident_icao ?? record.ident ?? null;
 }
 
-async function fetchJson<T>(path: string) {
+// Why: every selected-flight detail and feed-metadata warm enrichment funnels
+// through `/flights/{ident}` here. Without dedup, two callers asking about
+// the same DAL1061 within seconds fire two HTTP requests and burn double the
+// AeroAPI quota. A short response cache (90s) covers the typical "user
+// selects a flight that's also being warmed" race; in-flight coalescing
+// covers the "fired in the same tick" case.
+const HTTP_RESPONSE_CACHE_TTL_MS = 1000 * 90;
+const HTTP_RESPONSE_CACHE_MAX_ENTRIES = 200;
+const httpResponseCache = new Map<string, CacheEntry<unknown>>();
+const httpInFlightRequests = new Map<string, Promise<unknown>>();
+
+async function fetchJson<T>(path: string): Promise<T | null> {
   const headers = getAeroApiHeaders();
 
   if (!headers) {
     throw new Error("Missing AeroAPI credentials");
   }
 
-  const response = await fetch(`${AEROAPI_BASE_URL}${path}`, {
-    headers,
-    cache: "no-store"
-  });
-
-  if (response.status === 404) {
-    return null;
+  const cached = getCachedValue(httpResponseCache, path);
+  if (cached !== undefined) {
+    return cached as T | null;
   }
 
-  if (!response.ok) {
-    throw new AeroApiRequestError(path, response.status);
+  const inFlight = httpInFlightRequests.get(path);
+  if (inFlight) {
+    return inFlight as Promise<T | null>;
   }
 
-  return (await response.json()) as T;
+  const request = (async (): Promise<T | null> => {
+    const response = await fetch(`${AEROAPI_BASE_URL}${path}`, {
+      headers,
+      cache: "no-store"
+    });
+
+    if (response.status === 404) {
+      setCachedValue(httpResponseCache, path, null, HTTP_RESPONSE_CACHE_TTL_MS, HTTP_RESPONSE_CACHE_MAX_ENTRIES);
+      return null;
+    }
+
+    if (!response.ok) {
+      // Don't cache rate-limit or transient errors — let the caller see them
+      // and apply its own cooldown.
+      throw new AeroApiRequestError(path, response.status);
+    }
+
+    const data = (await response.json()) as T;
+    setCachedValue(httpResponseCache, path, data, HTTP_RESPONSE_CACHE_TTL_MS, HTTP_RESPONSE_CACHE_MAX_ENTRIES);
+    return data;
+  })();
+
+  httpInFlightRequests.set(path, request);
+
+  try {
+    return await request;
+  } finally {
+    httpInFlightRequests.delete(path);
+  }
 }
 
 async function resolveOperatorName(operatorCode: string | null) {
@@ -955,6 +1004,14 @@ export async function fetchAeroApiSelectedFlightDetails(
   // for it, and returning null here would needlessly blank the selected card.
   if (cached !== undefined) {
     return cached;
+  }
+
+  // Why: AeroAPI doesn't index private GA. Skip the upstream call entirely
+  // and short-circuit with a long-lived null cache so we don't ask again
+  // every time the user clicks the same N-reg helicopter.
+  if (isLikelyGeneralAviationFlight(flight)) {
+    setCachedValue(detailCache, cacheKey, null, GA_DETAIL_NULL_TTL_MS, DETAIL_CACHE_MAX_ENTRIES);
+    return null;
   }
 
   if (Date.now() < detailCooldownUntil) {
