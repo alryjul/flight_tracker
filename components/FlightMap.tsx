@@ -124,7 +124,19 @@ const FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS = 1000 * 60 * 30;
 const SELECTED_TRACK_REFRESH_GRACE_MS = 1000 * 30;
 const MAX_TRACK_SEGMENT_MILES = 320;
 const MAX_TRACK_TO_AIRCRAFT_MILES = 2.5;
-const MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES = 12;
+// Why: the bridge connects the trace tail to the first live breadcrumb
+// when the temporal-overlap filter has already dropped breadcrumbs the
+// trace covers. In nominal operation that gap is small (just past the
+// trace's ~1 min lag with adsb.lol full+recent merged). In edge cases —
+// brief feeder coverage holes, very fast aircraft, late selection — the
+// gap can stretch. We prefer a continuous visual line over a disjoint
+// for any plausible same-flight gap, only refusing to bridge when the
+// distance is so extreme the data is almost certainly corrupted (e.g.,
+// stale trace from a previous flight bleeding through). 100 mi covers
+// ~12 min of jet cruise or ~50 min of helicopter — comfortably past
+// realistic coverage holes, comfortably short of mistaken-flight
+// territory.
+const MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES = 100;
 const MIN_POSITION_CHANGE_MILES = 0.03;
 const MAX_POSITION_JITTER_DEADBAND_MILES = 0.12;
 const MIN_FLIGHT_ANIMATION_MS = 7500;
@@ -825,19 +837,36 @@ function getSanitizedTrackCoordinates(
     renderableProviderTrack.map((point) => [point.longitude, point.latitude] as [number, number])
   );
   const lastProviderTrackTimestampMs = getLastTrackTimestampMs(renderableProviderTrack);
+  const firstProviderTrackTimestampMs = getFirstTrackTimestampMs(renderableProviderTrack);
 
   let trailEndTimestampMs = lastProviderTrackTimestampMs;
 
-  // Why: only AeroAPI's `/flights/{id}/track` is a *comprehensive* track
-  // (departure to now). When we have one, breadcrumbs that fall before its
-  // tail are duplicates and get filtered. OpenSky's `/tracks/all` is
-  // *sparse* — often just a small cluster near the current position — so
-  // filtering breadcrumbs against its tail timestamp would drop minutes of
-  // useful client-accumulated history and produce the visual "nuke and
-  // repaint from current position" pattern. Track records sourced from
-  // AeroAPI carry a non-null `faFlightId`; OpenSky-only fallbacks don't.
-  const isComprehensiveProviderTrack =
-    track != null && track.faFlightId != null && providerTrack.length > 0;
+  // Why: drop breadcrumbs whose timestamp falls WITHIN the provider track's
+  // time range — they're duplicates of points the trace already renders,
+  // just at slightly different lat/lon (different sampling cadences /
+  // sources). Drawing both produces a visible ghost line parallel to the
+  // real track. Breadcrumbs OUTSIDE the trace coverage (older than its
+  // head, or newer than its tail) are kept — those fill the gaps.
+  //
+  // This subsumes the previous "only filter when AeroAPI" heuristic. For
+  // sparse OpenSky tracks (short window near the current position),
+  // breadcrumbs older than the trace head pass through and still provide
+  // the historical trail. For comprehensive tracks (adsb.lol / AeroAPI),
+  // the duplicates that caused the ghost line are dropped.
+  function breadcrumbOverlapsProviderTrack(point: BreadcrumbPoint): boolean {
+    if (
+      point.providerTimestampSec == null ||
+      firstProviderTrackTimestampMs == null ||
+      lastProviderTrackTimestampMs == null
+    ) {
+      return false;
+    }
+    const breadcrumbMs = point.providerTimestampSec * 1000;
+    return (
+      breadcrumbMs >= firstProviderTrackTimestampMs &&
+      breadcrumbMs <= lastProviderTrackTimestampMs
+    );
+  }
 
   // Why: the time-based cap below isn't enough on its own. For slow GA
   // traffic (~60kt) a breadcrumb appended the moment a poll lands has a
@@ -890,12 +919,12 @@ function getSanitizedTrackCoordinates(
       if (breadcrumbLeadFilter && !breadcrumbLeadFilter(point)) {
         return false;
       }
-      return (
-        !isComprehensiveProviderTrack ||
-        lastProviderTrackTimestampMs == null ||
-        point.providerTimestampSec == null ||
-        point.providerTimestampSec * 1000 > lastProviderTrackTimestampMs
-      );
+      // Temporal-overlap filter — drop breadcrumbs already covered by the
+      // provider track. See breadcrumbOverlapsProviderTrack above.
+      if (breadcrumbOverlapsProviderTrack(point)) {
+        return false;
+      }
+      return true;
     });
     breadcrumbCoordinates = eligibleBreadcrumbs.map((point) => point.coordinate);
 
