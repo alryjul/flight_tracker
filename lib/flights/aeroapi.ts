@@ -25,13 +25,19 @@ const OPERATOR_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 // the warm queue, leaving headroom for selected-flight detail + retries
 // without triggering 429 cooldowns.
 const MAX_FEED_METADATA_LOOKUPS = 6;
-const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 1;
-// Why: top-10 is roughly the visual top of the strip stack (cards the user
-// is most likely to look at first). Drain is paced at 1 call per 8 s, so
-// 10 in queue = ~80 s — quota-safe even when we're warming both
-// commercial and GA.
+// Why: bumped 1 → 3. The top-3 strip cards now always get a route lookup
+// in the same poll cycle they appear, instead of waiting ~80 s for the
+// background pump to reach them. Cost: each /api/flights response does up
+// to 3 sequential AeroAPI fetches (~500 ms each) when there are uncached
+// targets, adding ~1-2 s to that request. Acceptable at our 4 s polling
+// interval and dominated by AeroAPI latency, not by quota.
+const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 3;
 const FEED_METADATA_WARM_TARGET = 10;
-const FEED_METADATA_REQUEST_SPACING_MS = 1000 * 8;
+// Why: dropped 8000 → 3000. The drain pump now processes one queued
+// warm every 3 s instead of every 8 s, so top-10 warm completes in
+// ~21 s instead of ~80 s. The 45 s rate-limit cooldown still backs us
+// off if AeroAPI starts 429-ing.
+const FEED_METADATA_REQUEST_SPACING_MS = 1000 * 3;
 const FEED_METADATA_RATE_LIMIT_COOLDOWN_MS = 1000 * 45;
 const DETAIL_RATE_LIMIT_COOLDOWN_MS = 1000 * 30;
 const RATE_LIMIT_NULL_TTL_MS = 1000 * 30;
