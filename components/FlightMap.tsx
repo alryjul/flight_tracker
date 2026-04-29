@@ -784,10 +784,26 @@ function getSanitizedTrackCoordinates(
   displayedProviderTimestampMs: number | null
 ) {
   const providerTrack = track?.track ?? [];
+  // Why: the trail tail can be marginally fresher than the animated icon's
+  // playback position because the icon coasts off OpenSky/adsb.lol position
+  // snapshots (with 4s polls + 2.5s extrapolation) while the trail comes
+  // from adsb.lol's full trace which is updated near-real-time. Without
+  // this filter the trail visibly leads the icon by a couple seconds — at
+  // 500kt that's a few hundred meters, very noticeable. Drop trail points
+  // newer than the icon's playback time so the trail tail aligns with
+  // (or sits just behind) the icon. The icon-tail append below then
+  // closes any small remaining gap.
+  const renderableProviderTrack =
+    displayedProviderTimestampMs == null
+      ? providerTrack
+      : providerTrack.filter((point) => {
+          const pointMs = Date.parse(point.timestamp);
+          return !Number.isFinite(pointMs) || pointMs <= displayedProviderTimestampMs;
+        });
   const sanitizedCoordinates = sanitizeCoordinateSequence(
-    providerTrack.map((point) => [point.longitude, point.latitude] as [number, number])
+    renderableProviderTrack.map((point) => [point.longitude, point.latitude] as [number, number])
   );
-  const lastProviderTrackTimestampMs = getLastTrackTimestampMs(providerTrack);
+  const lastProviderTrackTimestampMs = getLastTrackTimestampMs(renderableProviderTrack);
 
   let trailEndTimestampMs = lastProviderTrackTimestampMs;
 
@@ -803,13 +819,26 @@ function getSanitizedTrackCoordinates(
     track != null && track.faFlightId != null && providerTrack.length > 0;
 
   if (breadcrumbPoints.length > 0) {
-    const eligibleBreadcrumbs = breadcrumbPoints.filter(
-      (point) =>
+    const eligibleBreadcrumbs = breadcrumbPoints.filter((point) => {
+      // Cap breadcrumbs at the icon's playback time too, same reason as
+      // the provider-track filter above: keep the trail from leading the
+      // icon. Breadcrumbs accumulate from /api/flights polls so they're
+      // typically only a few seconds older than the icon's playback time
+      // anyway.
+      if (
+        displayedProviderTimestampMs != null &&
+        point.providerTimestampSec != null &&
+        point.providerTimestampSec * 1000 > displayedProviderTimestampMs
+      ) {
+        return false;
+      }
+      return (
         !isComprehensiveProviderTrack ||
         lastProviderTrackTimestampMs == null ||
         point.providerTimestampSec == null ||
         point.providerTimestampSec * 1000 > lastProviderTrackTimestampMs
-    );
+      );
+    });
     const breadcrumbCoordinates = eligibleBreadcrumbs.map((point) => point.coordinate);
 
     if (sanitizedCoordinates.length === 0) {
