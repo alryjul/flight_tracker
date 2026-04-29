@@ -5,7 +5,8 @@ import {
 } from "@/lib/flights/aeroapi";
 import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
 import type { FlightArea } from "@/lib/flights/opensky";
-import { getDiscoveryScore } from "@/lib/flights/scoring";
+import { getDiscoveryScore, hasCommercialFlightIdentity } from "@/lib/flights/scoring";
+import { inferOriginFromTrack } from "@/lib/flights/trackInference";
 import type { Flight } from "@/lib/flights/types";
 import { distanceBetweenPointsMiles } from "@/lib/geo";
 
@@ -535,6 +536,159 @@ function adsbLolAircraftToFlight(
 }
 
 
+// ---------------------------------------------------------------------
+// Track-derived origin enrichment for GA
+// ---------------------------------------------------------------------
+//
+// Why: AeroAPI's flight database is sparse for GA — most VFR pattern
+// work / charter / news / LAPD operations file no plan, so AeroAPI
+// returns nothing. Instead, we read the takeoff position from the
+// adsb.lol trace (the first leg-pruned point) and match it to a
+// known LA-area airport (or reverse-geocode to a neighborhood for
+// non-airport origins). adsb.lol traces are free; AeroAPI is rate-
+// limited per minute. Spending the AeroAPI budget on commercial
+// (where it works) and using traces for GA (where AeroAPI doesn't
+// work anyway) is a clean trade.
+
+const TRACK_ORIGIN_HIT_TTL_MS = 1000 * 60 * 60 * 2;
+const TRACK_ORIGIN_NULL_TTL_MS = 1000 * 60 * 5;
+const TRACK_ORIGIN_CACHE_MAX_ENTRIES = 500;
+const TRACK_ORIGIN_WARM_TARGET = 5;
+const TRACK_ORIGIN_WARM_REQUEST_SPACING_MS = 2000;
+
+type TrackOriginCacheEntry = {
+  origin: string | null;
+  expiresAt: number;
+};
+
+const trackOriginCache = new Map<string, TrackOriginCacheEntry>();
+const trackOriginWarmQueue: string[] = [];
+const trackOriginWarmFlights = new Map<string, Flight>();
+let trackOriginWarmTimer: ReturnType<typeof setTimeout> | null = null;
+let lastTrackOriginWarmAt = 0;
+
+function getCachedTrackOrigin(icao24: string) {
+  const cached = trackOriginCache.get(icao24);
+  if (!cached) return undefined;
+  if (Date.now() > cached.expiresAt) {
+    trackOriginCache.delete(icao24);
+    return undefined;
+  }
+  // LRU touch
+  trackOriginCache.delete(icao24);
+  trackOriginCache.set(icao24, cached);
+  return cached.origin;
+}
+
+function setCachedTrackOrigin(icao24: string, origin: string | null) {
+  if (
+    !trackOriginCache.has(icao24) &&
+    trackOriginCache.size >= TRACK_ORIGIN_CACHE_MAX_ENTRIES
+  ) {
+    const oldest = trackOriginCache.keys().next().value;
+    if (oldest !== undefined) trackOriginCache.delete(oldest);
+  }
+  trackOriginCache.set(icao24, {
+    origin,
+    expiresAt: Date.now() + (origin ? TRACK_ORIGIN_HIT_TTL_MS : TRACK_ORIGIN_NULL_TTL_MS)
+  });
+}
+
+function scheduleTrackOriginWarmPump() {
+  if (trackOriginWarmTimer != null || trackOriginWarmQueue.length === 0) {
+    return;
+  }
+  const sinceLast = Date.now() - lastTrackOriginWarmAt;
+  const delayMs = Math.max(0, TRACK_ORIGIN_WARM_REQUEST_SPACING_MS - sinceLast);
+  trackOriginWarmTimer = setTimeout(() => {
+    trackOriginWarmTimer = null;
+    void drainTrackOriginWarmQueue();
+  }, delayMs);
+}
+
+async function drainTrackOriginWarmQueue() {
+  while (trackOriginWarmQueue.length > 0) {
+    const icao24 = trackOriginWarmQueue.shift();
+    if (!icao24) continue;
+    const flight = trackOriginWarmFlights.get(icao24);
+    trackOriginWarmFlights.delete(icao24);
+    if (!flight) continue;
+    if (getCachedTrackOrigin(icao24) !== undefined) continue;
+
+    lastTrackOriginWarmAt = Date.now();
+    try {
+      const trace = await fetchAdsbLolSelectedFlightTrack(icao24);
+      const origin = await inferOriginFromTrack(trace);
+      setCachedTrackOrigin(icao24, origin);
+    } catch (error) {
+      console.error("track-origin warm failed", { icao24, error });
+      // Don't cache on error — let the next pump try again.
+    }
+    break; // one per pump tick — the schedule loop continues
+  }
+
+  if (trackOriginWarmQueue.length > 0) {
+    scheduleTrackOriginWarmPump();
+  }
+}
+
+function queueTrackOriginWarm(flights: Flight[]) {
+  for (const flight of flights) {
+    if (getCachedTrackOrigin(flight.id) !== undefined) continue;
+    if (trackOriginWarmFlights.has(flight.id)) continue;
+    trackOriginWarmFlights.set(flight.id, flight);
+    trackOriginWarmQueue.push(flight.id);
+  }
+  scheduleTrackOriginWarmPump();
+}
+
+// Why: enrichment shape mirrors enrichFlightsWithAeroApiMetadata so the
+// callers can chain them without surprises. For each visible GA flight
+// without an origin: read the cache, merge if hit. For uncached, queue
+// for background warm. Returns flights with cache values applied
+// immediately — the queued ones populate over the next few polls as the
+// pump drains.
+export async function enrichFlightsWithTrackInferredOrigin(
+  flights: Flight[],
+  options?: {
+    warm?: boolean;
+    center?: { latitude: number; longitude: number };
+  }
+): Promise<Flight[]> {
+  if (flights.length === 0) return flights;
+
+  const warm = options?.warm ?? true;
+  const center = options?.center;
+
+  const merged = flights.map((flight) => {
+    if (flight.origin != null) return flight;
+    const cached = getCachedTrackOrigin(flight.id);
+    if (cached === undefined || cached == null) return flight;
+    return { ...flight, origin: cached };
+  });
+
+  if (!warm) return merged;
+
+  const candidates = merged.filter(
+    (flight) =>
+      flight.origin == null &&
+      !hasCommercialFlightIdentity(flight) &&
+      !isStationaryOnGroundFlight(flight) &&
+      getCachedTrackOrigin(flight.id) === undefined
+  );
+
+  if (candidates.length === 0) return merged;
+
+  const ranked = center
+    ? [...candidates].sort(
+        (left, right) => getDiscoveryScore(left, center) - getDiscoveryScore(right, center)
+      )
+    : candidates;
+  queueTrackOriginWarm(ranked.slice(0, TRACK_ORIGIN_WARM_TARGET));
+
+  return merged;
+}
+
 export async function fetchAdsbLolFlights(
   area: FlightArea,
   options?: { warmAeroApiFeed?: boolean }
@@ -586,7 +740,24 @@ export async function fetchAdsbLolFlights(
     .sort((left, right) => getDiscoveryScore(left, area.center) - getDiscoveryScore(right, area.center))
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 
-  return enrichFlightsWithAeroApiMetadata(enrichFlightsWithAdsbdbFallback(flights), {
+  // Why: chain order matters.
+  //   1. ADSBdb — fills in aircraft type / registered owner / commercial
+  //      route data (when available). Pure data merge, no API on the
+  //      hot path.
+  //   2. Track-inferred origin — uses cached adsb.lol traces to infer GA
+  //      takeoff airports, since AeroAPI is bad for VFR GA. Returns
+  //      cache hits immediately, queues misses for background warming.
+  //   3. AeroAPI feed metadata — only for commercial (the warm filter
+  //      now excludes GA), populates origin/destination/airline/etc
+  //      where AeroAPI is rich.
+  // Net: AeroAPI quota goes entirely to commercial (where it works),
+  // GA gets origin via track inference (which works for VFR).
+  const adsbdbEnriched = enrichFlightsWithAdsbdbFallback(flights);
+  const trackInferred = await enrichFlightsWithTrackInferredOrigin(adsbdbEnriched, {
+    warm: options?.warmAeroApiFeed ?? true,
+    center: area.center
+  });
+  return enrichFlightsWithAeroApiMetadata(trackInferred, {
     warm: options?.warmAeroApiFeed ?? true,
     center: area.center
   });

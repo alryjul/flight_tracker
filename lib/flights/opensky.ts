@@ -1,4 +1,5 @@
 import { APP_CONFIG } from "@/lib/config";
+import { enrichFlightsWithTrackInferredOrigin } from "@/lib/flights/adsblol";
 import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
 import {
   enrichFlightsWithAeroApiMetadata,
@@ -164,7 +165,13 @@ export async function fetchOpenSkyFlights(
     .sort((left, right) => getDiscoveryScore(left, area.center) - getDiscoveryScore(right, area.center))
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 
-  return enrichFlightsWithAeroApiMetadata(enrichFlightsWithAdsbdbFallback(flights), {
+  // See adsblol.ts for the full chain rationale — same pattern here.
+  const adsbdbEnriched = enrichFlightsWithAdsbdbFallback(flights);
+  const trackInferred = await enrichFlightsWithTrackInferredOrigin(adsbdbEnriched, {
+    warm: options?.warmAeroApiFeed ?? true,
+    center: area.center
+  });
+  return enrichFlightsWithAeroApiMetadata(trackInferred, {
     warm: options?.warmAeroApiFeed ?? true,
     center: area.center
   });

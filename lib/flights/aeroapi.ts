@@ -1035,9 +1035,17 @@ export async function enrichFlightsWithAeroApiMetadata(
     return mergedFlights;
   }
 
+  // Why: AeroAPI's flight-plan database has high hit rate for commercial
+  // and near-zero for VFR GA. We now infer GA origins from adsb.lol track
+  // takeoff positions instead (lib/flights/adsblol.ts trackOriginCache),
+  // which is free and works for VFR. So spend the AeroAPI per-minute
+  // budget exclusively on commercial — those are the flights it actually
+  // helps.
   const unresolvedFlights = mergedFlights.filter(
     (flight) =>
-      needsRouteMetadata(flight) && !isStationaryOnGroundFlight(flight)
+      isCommercialFlight(flight) &&
+      needsRouteMetadata(flight) &&
+      !isStationaryOnGroundFlight(flight)
   );
 
   if (unresolvedFlights.length === 0) {
