@@ -165,7 +165,8 @@ export async function fetchOpenSkyFlights(
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 
   return enrichFlightsWithAeroApiMetadata(enrichFlightsWithAdsbdbFallback(flights), {
-    warm: options?.warmAeroApiFeed ?? true
+    warm: options?.warmAeroApiFeed ?? true,
+    center: area.center
   });
 }
 

@@ -1,3 +1,4 @@
+import { getDiscoveryScore } from "@/lib/flights/scoring";
 import type { Flight } from "@/lib/flights/types";
 
 const AEROAPI_BASE_URL = "https://aeroapi.flightaware.com/aeroapi";
@@ -963,13 +964,17 @@ export function primeAeroApiFeedMetadata(
 
 export async function enrichFlightsWithAeroApiMetadata(
   flights: Flight[],
-  options?: { warm?: boolean }
+  options?: {
+    warm?: boolean;
+    center?: { latitude: number; longitude: number };
+  }
 ) {
   if (!hasAeroApiCredentials() || flights.length === 0) {
     return flights;
   }
 
   const warm = options?.warm ?? true;
+  const center = options?.center;
 
   const mergedFlights = flights.map((flight) =>
     mergeFeedMetadataIntoFlight(flight, getCachedValue(feedMetadataCache, getFeedMetadataCacheKey(flight)))
@@ -983,13 +988,6 @@ export async function enrichFlightsWithAeroApiMetadata(
     return mergedFlights;
   }
 
-  // Why: previously this filter was commercial-only, which meant GA
-  // strip cards never got route info populated proactively — even for
-  // GA that DOES have AeroAPI data (LAPD/sheriff helos, IFR cross-
-  // countries, charter under N-callsigns). Drop the commercial-only
-  // gate; getFeedWarmPriorityRank still keeps commercial ahead of GA
-  // at every phase, so commercial dominance is preserved while GA fills
-  // remaining warm slots.
   const unresolvedFlights = mergedFlights.filter(
     (flight) =>
       needsRouteMetadata(flight) && !isStationaryOnGroundFlight(flight)
@@ -999,10 +997,18 @@ export async function enrichFlightsWithAeroApiMetadata(
     return mergedFlights;
   }
 
+  // Why: priority for warming = same tiered scoring used elsewhere
+  // (lib/flights/scoring.ts). Magic zone (≤ 8 mi) wins regardless of
+  // commercial vs GA, so the closest aircraft to home base get warmed
+  // first — that's what the user actually wants. Beyond the magic
+  // zone, commercial naturally beats GA via the −12 mi commercial
+  // bonus. Falls back to phase-rank if center isn't supplied (defensive
+  // — every caller currently supplies it).
   const targetFlights = [...unresolvedFlights]
-    .sort(
-      (left, right) =>
-        getFeedWarmPriorityRank(left) - getFeedWarmPriorityRank(right)
+    .sort((left, right) =>
+      center
+        ? getDiscoveryScore(left, center) - getDiscoveryScore(right, center)
+        : getFeedWarmPriorityRank(left) - getFeedWarmPriorityRank(right)
     )
     .slice(0, FEED_METADATA_WARM_TARGET);
 
