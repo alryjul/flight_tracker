@@ -167,11 +167,11 @@ export async function fetchOpenSkyFlights(
 
   // See adsblol.ts for the full chain rationale — same pattern here.
   const adsbdbEnriched = enrichFlightsWithAdsbdbFallback(flights);
-  const trackInferred = await enrichFlightsWithTrackInferredOrigin(adsbdbEnriched, {
+  const aeroEnriched = await enrichFlightsWithAeroApiMetadata(adsbdbEnriched, {
     warm: options?.warmAeroApiFeed ?? true,
     center: area.center
   });
-  return enrichFlightsWithAeroApiMetadata(trackInferred, {
+  return enrichFlightsWithTrackInferredOrigin(aeroEnriched, {
     warm: options?.warmAeroApiFeed ?? true,
     center: area.center
   });

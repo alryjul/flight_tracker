@@ -3,6 +3,7 @@ import {
   reverseGeocodeLocationLabel
 } from "@/lib/flights/reverseGeocode";
 import { getDiscoveryScore } from "@/lib/flights/scoring";
+import { isOperatingVfr } from "@/lib/flights/squawk";
 import type { Flight } from "@/lib/flights/types";
 
 const AEROAPI_BASE_URL = "https://aeroapi.flightaware.com/aeroapi";
@@ -1035,15 +1036,19 @@ export async function enrichFlightsWithAeroApiMetadata(
     return mergedFlights;
   }
 
-  // Why: AeroAPI's flight-plan database has high hit rate for commercial
-  // and near-zero for VFR GA. We now infer GA origins from adsb.lol track
-  // takeoff positions instead (lib/flights/adsblol.ts trackOriginCache),
-  // which is free and works for VFR. So spend the AeroAPI per-minute
-  // budget exclusively on commercial — those are the flights it actually
-  // helps.
+  // Why: route the AeroAPI warm budget by squawk, not by commercial-vs-GA.
+  // The squawk tells us whether AeroAPI has any chance of having data:
+  //   • Squawk 1200 / SoCal VFR range → no flight plan filed →
+  //     AeroAPI will return null → don't burn the call. Track inference
+  //     handles these via adsb.lol traces.
+  //   • Any other squawk → could be commercial OR IFR-GA (biz jet,
+  //     charter, IFR cross-country). Worth an AeroAPI lookup. This
+  //     catches LAPD birds when they're on a discrete IFR code, Bonanzas
+  //     and TBMs on cross-country IFR plans, etc. — the segments that
+  //     filing a plan make AeroAPI useful for.
   const unresolvedFlights = mergedFlights.filter(
     (flight) =>
-      isCommercialFlight(flight) &&
+      !isOperatingVfr(flight) &&
       needsRouteMetadata(flight) &&
       !isStationaryOnGroundFlight(flight)
   );

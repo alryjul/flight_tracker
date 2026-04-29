@@ -5,7 +5,7 @@ import {
 } from "@/lib/flights/aeroapi";
 import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
 import type { FlightArea } from "@/lib/flights/opensky";
-import { getDiscoveryScore, hasCommercialFlightIdentity } from "@/lib/flights/scoring";
+import { getDiscoveryScore } from "@/lib/flights/scoring";
 import { inferOriginFromTrack } from "@/lib/flights/trackInference";
 import type { Flight } from "@/lib/flights/types";
 import { distanceBetweenPointsMiles } from "@/lib/geo";
@@ -669,10 +669,14 @@ export async function enrichFlightsWithTrackInferredOrigin(
 
   if (!warm) return merged;
 
+  // Why: any flight without an origin is fair game for track inference,
+  // not just GA. A commercial flight whose AeroAPI lookup returned null
+  // (charter under an N-callsign, or a flight AeroAPI just doesn't have
+  // yet) benefits from this fallback too. The chain order ensures
+  // AeroAPI hits already populated origin before we get here.
   const candidates = merged.filter(
     (flight) =>
       flight.origin == null &&
-      !hasCommercialFlightIdentity(flight) &&
       !isStationaryOnGroundFlight(flight) &&
       getCachedTrackOrigin(flight.id) === undefined
   );
@@ -741,23 +745,26 @@ export async function fetchAdsbLolFlights(
     .slice(0, DISCOVERY_FLIGHT_CANDIDATE_LIMIT);
 
   // Why: chain order matters.
-  //   1. ADSBdb — fills in aircraft type / registered owner / commercial
+  //   1. ADSBdb — fills aircraft type / registered owner / commercial
   //      route data (when available). Pure data merge, no API on the
   //      hot path.
-  //   2. Track-inferred origin — uses cached adsb.lol traces to infer GA
-  //      takeoff airports, since AeroAPI is bad for VFR GA. Returns
-  //      cache hits immediately, queues misses for background warming.
-  //   3. AeroAPI feed metadata — only for commercial (the warm filter
-  //      now excludes GA), populates origin/destination/airline/etc
-  //      where AeroAPI is rich.
-  // Net: AeroAPI quota goes entirely to commercial (where it works),
-  // GA gets origin via track inference (which works for VFR).
+  //   2. AeroAPI feed metadata — routes by squawk: VFR-squawk skipped,
+  //      everything else (commercial + IFR-GA / biz jet / charter)
+  //      tries AeroAPI. Catches the segment AeroAPI is rich for.
+  //   3. Track-inferred origin — fallback for ANY flight still missing
+  //      origin after the AeroAPI step. VFR-squawking flights skip
+  //      straight here; AeroAPI-misses also fall through. Queues
+  //      uncached candidates for background trace fetch + inference.
+  //
+  // Net: AeroAPI quota spent only on flights that have any chance of
+  // having a filed plan. Track inference covers the long VFR tail
+  // (most LA helicopters / pattern Cessnas) for free.
   const adsbdbEnriched = enrichFlightsWithAdsbdbFallback(flights);
-  const trackInferred = await enrichFlightsWithTrackInferredOrigin(adsbdbEnriched, {
+  const aeroEnriched = await enrichFlightsWithAeroApiMetadata(adsbdbEnriched, {
     warm: options?.warmAeroApiFeed ?? true,
     center: area.center
   });
-  return enrichFlightsWithAeroApiMetadata(trackInferred, {
+  return enrichFlightsWithTrackInferredOrigin(aeroEnriched, {
     warm: options?.warmAeroApiFeed ?? true,
     center: area.center
   });
