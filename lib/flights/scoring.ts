@@ -1,79 +1,121 @@
 import type { Flight } from "@/lib/flights/types";
 import { distanceBetweenPointsMiles } from "@/lib/geo";
 
-// Why: this scoring controls each discovery provider's top-N slice
-// (currently 80) that gets shipped to the client. It MUST stay aligned
-// with the client's `getVisibilityScore` (components/FlightMap.tsx) —
-// otherwise flights the client would prefer (e.g., a heavy at 25 mi
-// cruising in to KLAX) get cut here before the client can re-rank them.
+// Why: tier model with hard horizons. Single source of truth for the
+// server-side discovery slice (top-80 candidates per provider) AND the
+// client-side visible-flight ranking (top-50 rendered icons / strip
+// cards). Keeping them in one place means future tweaks to the tier
+// definitions automatically apply everywhere — no chance of drift
+// between server and client.
 //
-// Tiered model with hard horizons mirrors the client tiers exactly:
-//   • magic zone (≤ 8 mi): always priority
-//   • GA past 12 mi: hard buried
-//   • anything past 35 mi: soft buried (commercials at the edge can still
-//     compete if no closer traffic)
-//   • bonuses: commercial −12 mi, low altitude (<3000 ft, airborne) −6 mi
-//   • penalties: GA on ground +25 mi, commercial on ground +4 mi
-//
-// Server-side providers can only key commercial-vs-GA on callsign prefix
-// (no flightNumber yet at this stage — AeroAPI enrichment runs after
-// scoring). The client uses both signals, so a few flights might be
-// ranked slightly differently between server and client; that's
-// acceptable because the slice is permissive enough (top-80) for the
-// client's re-rank to top-50 to recover any borderline cases.
-export const DISCOVERY_RANKING_MAGIC_ZONE_MILES = 8;
-export const DISCOVERY_RANKING_GA_HORIZON_MILES = 12;
-export const DISCOVERY_RANKING_COMMERCIAL_HORIZON_MILES = 35;
-export const DISCOVERY_RANKING_COMMERCIAL_BONUS_MILES = 12;
-export const DISCOVERY_RANKING_LOW_ALTITUDE_BONUS_MILES = 6;
-export const DISCOVERY_RANKING_LOW_ALTITUDE_FEET = 3000;
-export const DISCOVERY_RANKING_GROUND_PENALTY_MILES = 25;
-export const DISCOVERY_RANKING_COMMERCIAL_GROUND_PENALTY_MILES = 4;
-export const DISCOVERY_RANKING_HARD_BURY_OFFSET = 100;
-export const DISCOVERY_RANKING_SOFT_BURY_OFFSET = 50;
-export const DISCOVERY_RANKING_MAGIC_ZONE_OFFSET = 100;
+// Tiers:
+//   • magic zone (≤ 8 mi): score = miles − 100. Always priority.
+//   • GA past 12 mi: score = miles + 100. Hard bury.
+//   • anything past 35 mi: score = miles + 50. Soft bury (commercials at
+//     the edge can still compete if no closer traffic).
+//   • In-range bonuses: commercial −12 mi, low altitude (<3000 ft,
+//     airborne) −6 mi.
+//   • In-range penalties: GA on ground +25 mi, commercial on ground
+//     +4 mi.
+export const RANKING_MAGIC_ZONE_MILES = 8;
+export const RANKING_GA_HORIZON_MILES = 12;
+export const RANKING_COMMERCIAL_HORIZON_MILES = 35;
+export const RANKING_COMMERCIAL_BONUS_MILES = 12;
+export const RANKING_LOW_ALTITUDE_BONUS_MILES = 6;
+export const RANKING_LOW_ALTITUDE_FEET = 3000;
+export const RANKING_GROUND_PENALTY_MILES = 25;
+export const RANKING_COMMERCIAL_GROUND_PENALTY_MILES = 4;
+export const RANKING_HARD_BURY_OFFSET = 100;
+export const RANKING_SOFT_BURY_OFFSET = 50;
+export const RANKING_MAGIC_ZONE_OFFSET = 100;
 
+// Why: shared callsign-prefix check used by feed enrichment, the
+// selected-flight metadata trust check, and the strip operator-label
+// rendering. Exported so we don't drift between scoring.ts and
+// FlightMap.tsx.
+export function hasCommercialFlightIdentity(flight: Flight) {
+  if (flight.flightNumber) {
+    return true;
+  }
+  const callsign = flight.callsign.trim().toUpperCase();
+  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
+}
+
+// Why: server-side scoring runs BEFORE AeroAPI feed-metadata enrichment,
+// so flightNumber is always null at that point. The callsign-only check
+// is the only signal available. Client uses the more permissive
+// hasCommercialFlightIdentity (which also considers flightNumber, set by
+// enrichment).
 function isCommercialCallsignIdentity(flight: Flight) {
   const callsign = flight.callsign.trim().toUpperCase();
   return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
 }
 
-export function getDiscoveryScore(
+// Internal: applies the tier model given a precomputed isCommercial flag.
+// The two public scoring functions only differ in how they detect
+// commercial status — the math itself is identical.
+function scoreWithTiers(flight: Flight, miles: number, isCommercial: boolean) {
+  if (miles <= RANKING_MAGIC_ZONE_MILES) {
+    return miles - RANKING_MAGIC_ZONE_OFFSET;
+  }
+  if (!isCommercial && miles > RANKING_GA_HORIZON_MILES) {
+    return miles + RANKING_HARD_BURY_OFFSET;
+  }
+  if (miles > RANKING_COMMERCIAL_HORIZON_MILES) {
+    return miles + RANKING_SOFT_BURY_OFFSET;
+  }
+
+  let score = miles;
+  if (isCommercial) {
+    score -= RANKING_COMMERCIAL_BONUS_MILES;
+  }
+  if (flight.onGround) {
+    score += isCommercial
+      ? RANKING_COMMERCIAL_GROUND_PENALTY_MILES
+      : RANKING_GROUND_PENALTY_MILES;
+  } else if (
+    flight.altitudeFeet != null &&
+    flight.altitudeFeet < RANKING_LOW_ALTITUDE_FEET
+  ) {
+    score -= RANKING_LOW_ALTITUDE_BONUS_MILES;
+  }
+  return score;
+}
+
+function distanceMiles(
   flight: Flight,
   center: { latitude: number; longitude: number }
 ) {
-  const miles = distanceBetweenPointsMiles({
+  return distanceBetweenPointsMiles({
     fromLatitude: center.latitude,
     fromLongitude: center.longitude,
     toLatitude: flight.latitude,
     toLongitude: flight.longitude
   });
-  const isCommercial = isCommercialCallsignIdentity(flight);
+}
 
-  if (miles <= DISCOVERY_RANKING_MAGIC_ZONE_MILES) {
-    return miles - DISCOVERY_RANKING_MAGIC_ZONE_OFFSET;
-  }
+// Server-side: callsign-only commercial detection (flightNumber not yet
+// populated at discovery scoring time).
+export function getDiscoveryScore(
+  flight: Flight,
+  center: { latitude: number; longitude: number }
+) {
+  return scoreWithTiers(
+    flight,
+    distanceMiles(flight, center),
+    isCommercialCallsignIdentity(flight)
+  );
+}
 
-  if (!isCommercial && miles > DISCOVERY_RANKING_GA_HORIZON_MILES) {
-    return miles + DISCOVERY_RANKING_HARD_BURY_OFFSET;
-  }
-  if (miles > DISCOVERY_RANKING_COMMERCIAL_HORIZON_MILES) {
-    return miles + DISCOVERY_RANKING_SOFT_BURY_OFFSET;
-  }
-
-  let score = miles;
-  if (isCommercial) {
-    score -= DISCOVERY_RANKING_COMMERCIAL_BONUS_MILES;
-  }
-  if (flight.onGround) {
-    score += isCommercial
-      ? DISCOVERY_RANKING_COMMERCIAL_GROUND_PENALTY_MILES
-      : DISCOVERY_RANKING_GROUND_PENALTY_MILES;
-  } else if (
-    flight.altitudeFeet != null &&
-    flight.altitudeFeet < DISCOVERY_RANKING_LOW_ALTITUDE_FEET
-  ) {
-    score -= DISCOVERY_RANKING_LOW_ALTITUDE_BONUS_MILES;
-  }
-  return score;
+// Client-side: callsign + flightNumber commercial detection. Used to
+// pick the visible top-50 from the server's top-80 slice.
+export function getVisibilityScore(
+  flight: Flight,
+  center: { latitude: number; longitude: number }
+) {
+  return scoreWithTiers(
+    flight,
+    distanceMiles(flight, center),
+    hasCommercialFlightIdentity(flight)
+  );
 }

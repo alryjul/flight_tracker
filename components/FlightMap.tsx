@@ -10,6 +10,10 @@ import {
   milesToLongitudeDelta
 } from "@/lib/geo";
 import type { Flight } from "@/lib/flights/types";
+import {
+  getVisibilityScore,
+  hasCommercialFlightIdentity
+} from "@/lib/flights/scoring";
 import type { AeroApiFeedMetadata } from "@/lib/flights/aeroapi";
 
 type FlightApiResponse = {
@@ -135,48 +139,9 @@ const VISIBLE_FLIGHT_EXIT_RANK = 80;
 // drop, masking any remaining single-poll score jitter.
 const VISIBLE_FLIGHT_LINGER_MS = 1000 * 60;
 
-// --- Ranking tuning ---
-// The visibility score is base distance from home + adjustments. Tiered:
-//   • Within MAGIC_ZONE_MILES: capped negative score → always top-of-list.
-//     If you can see it from the front yard, it deserves a slot.
-//   • GA beyond GA_HORIZON_MILES: hard buried (Cessna patterns in Pomona
-//     stop competing for visibility, ever).
-//   • Anything beyond COMMERCIAL_HORIZON_MILES: hard buried (long-range
-//     overflights past our useful range).
-//   • Inside the eligible bands: weighted bonuses for commercial identity,
-//     low altitude (visible approach/departure), and a penalty for cruise
-//     altitude (boring overhead dot).
-//
-// The hard horizons are the main churn-killer: they prevent fringe-rank
-// flights from oscillating in/out of the visible set on noise.
-const RANKING_MAGIC_ZONE_MILES = 8;
-const RANKING_GA_HORIZON_MILES = 12;
-// Why: extended from 25 → 35 so KLAX arrivals from the east/north — which
-// pass over the WeHo viewport at altitude while still 20-30 mi out — get a
-// chance to show up before they're on final. The hard horizon still
-// excludes long-range overflights, just gives more lead time.
-const RANKING_COMMERCIAL_HORIZON_MILES = 35;
-// Why: commercial bonus bumped 8 → 12 so the "writ large" preference for
-// commercial traffic actually wins over the volume of low-altitude GA
-// pattern work at SMO/VNY. With −12 mi a cruise heavy overhead at 12 mi
-// (score 0) beats an SMO Cessna in the pattern at 9 mi (score 3).
-const RANKING_COMMERCIAL_BONUS_MILES = 12;
-const RANKING_LOW_ALTITUDE_BONUS_MILES = 6;
-const RANKING_LOW_ALTITUDE_FEET = 3000;
-// Why: cruise penalty removed. A cruise commercial overhead is still
-// interesting — it's commercial, it's overhead, the user wanted these to
-// surface. Penalizing them for altitude just gave SMO GA an unwarranted
-// edge.
-const RANKING_HIGH_CRUISE_PENALTY_MILES = 0;
-const RANKING_HIGH_CRUISE_FEET = 30000;
-const RANKING_GROUND_PENALTY_MILES = 25;
-// Why: commercial-on-ground penalty halved 8 → 4 so a taxi heavy at LAX
-// rides at the same level as SMO patterns instead of well below them. A
-// 747 holding short at LAX is a worthwhile thing to surface.
-const RANKING_COMMERCIAL_GROUND_PENALTY_MILES = 4;
-const RANKING_HARD_BURY_OFFSET = 100;
-const RANKING_SOFT_BURY_OFFSET = 50;
-const RANKING_MAGIC_ZONE_OFFSET = 100;
+// Why: ranking tier model lives in lib/flights/scoring.ts so the server
+// (discovery slice) and client (visible-flight rank) never drift apart.
+// See that module for the full tier semantics + tuning rationale.
 const STRIP_REORDER_INTERVAL_MS = 24000;
 const STRIP_REORDER_RANK_THRESHOLD = 2;
 const STRIP_REORDER_SCORE_THRESHOLD = 1.25;
@@ -383,16 +348,6 @@ function getCompactRouteLabel(flight: Flight) {
   }
 
   return null;
-}
-
-function hasCommercialFlightIdentity(flight: Flight) {
-  if (flight.flightNumber) {
-    return true;
-  }
-
-  const callsign = flight.callsign.trim().toUpperCase();
-
-  return /^[A-Z]{3}\d/.test(callsign) && !/^N\d/.test(callsign);
 }
 
 function getFeedMetadataMerge(
@@ -737,50 +692,6 @@ function getDistanceFromHomeBaseMiles(flight: Flight, center: HomeBaseCenter) {
     toLatitude: flight.latitude,
     toLongitude: flight.longitude
   });
-}
-
-function getVisibilityScore(flight: Flight, center: HomeBaseCenter) {
-  const miles = getDistanceFromHomeBaseMiles(flight, center);
-  const isCommercial = hasCommercialFlightIdentity(flight);
-
-  // Magic zone — anything inside this radius wins regardless of phase or
-  // type. The cap at (miles - OFFSET) keeps these flights ordered by
-  // distance among themselves but firmly above everything else.
-  if (miles <= RANKING_MAGIC_ZONE_MILES) {
-    return miles - RANKING_MAGIC_ZONE_OFFSET;
-  }
-
-  // Hard horizons — flights past the relevant horizon can't compete for
-  // top-50 slots. This is the main churn killer: a fringe-rank flight far
-  // away can't oscillate in/out of the visible set on tiny distance noise.
-  if (!isCommercial && miles > RANKING_GA_HORIZON_MILES) {
-    return miles + RANKING_HARD_BURY_OFFSET;
-  }
-  if (miles > RANKING_COMMERCIAL_HORIZON_MILES) {
-    return miles + RANKING_SOFT_BURY_OFFSET;
-  }
-
-  // In-range adjustments
-  let score = miles;
-  if (isCommercial) {
-    score -= RANKING_COMMERCIAL_BONUS_MILES;
-  }
-  if (flight.onGround) {
-    // Taxiing heavies at LAX are still interesting. Parked GA at SMO are
-    // not. Different penalties.
-    score += isCommercial
-      ? RANKING_COMMERCIAL_GROUND_PENALTY_MILES
-      : RANKING_GROUND_PENALTY_MILES;
-  } else if (flight.altitudeFeet != null) {
-    if (flight.altitudeFeet < RANKING_LOW_ALTITUDE_FEET) {
-      // Visible approach / departure — surface this strongly.
-      score -= RANKING_LOW_ALTITUDE_BONUS_MILES;
-    } else if (flight.altitudeFeet > RANKING_HIGH_CRUISE_FEET) {
-      // Cruise overhead is a pinpoint dot — less ambient interest.
-      score += RANKING_HIGH_CRUISE_PENALTY_MILES;
-    }
-  }
-  return score;
 }
 
 function getLiveFlightIdentityKey(flight: Pick<Flight, "id" | "callsign">) {
