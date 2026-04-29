@@ -32,7 +32,12 @@ const MAX_FEED_METADATA_LOOKUPS = 6;
 // still get an immediate fetch on appearance, but per-poll burn is
 // 33% lower than at 3.
 const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 2;
-const FEED_METADATA_WARM_TARGET = 10;
+// Why: 10 → 6. AeroAPI's rate-limiting is per-minute, not daily, so
+// burst-control matters more than long-run total. A smaller warm target
+// keeps the queue shorter and reduces per-minute pressure during fresh-
+// viewport warmup. Top-6 still covers the visible top of the strip
+// stack — the cards a user is likely to look at first.
+const FEED_METADATA_WARM_TARGET = 6;
 // Why: 3000 → 5000. Drain pacing is back to a comfortable rate
 // (12 calls/min from the queue worst case vs 20). Combined with 30 min
 // null caching for misses, the steady-state cost should keep us safely
