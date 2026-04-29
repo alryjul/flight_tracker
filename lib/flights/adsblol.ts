@@ -34,6 +34,19 @@ const ADSBLOL_RATE_LIMIT_COOLDOWN_MS = 1000 * 30;
 // segments marks a leg break. A normal landing rollout / brief taxi
 // is well under 15 min; a between-leg parking stop is well over.
 const ADSBLOL_LEG_BREAK_THRESHOLD_SEC = 15 * 60;
+// Why: helicopters and other rotorcraft commonly operate from elevated
+// pads (rooftops, hilltop heliports) where the parked altitude is
+// reported as 1000-1500 ft AGL — well above our 200 ft "near ground"
+// floor. So a multi-hour ADS-B silence followed by re-emergence at
+// hover-speed altitudes won't trigger the gap-with-ground-touch rule
+// above, and the previous leg's path bleeds into the new one. A gap
+// this long is a leg break regardless of altitude — even the longest
+// transoceanic cruise gap (SIA7402's ~459 min Pacific dropout) is
+// over 33k ft, so altitude-aware rules still distinguish that case
+// at shorter thresholds. One hour is a comfortable margin: way longer
+// than any plausible domestic ADS-B coverage hole, way shorter than
+// any meaningful parking turnaround.
+const ADSBLOL_LONG_GAP_LEG_BREAK_THRESHOLD_SEC = 60 * 60;
 
 type CacheEntry = {
   expiresAt: number;
@@ -156,21 +169,24 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
     const point = trace[i]!;
     const prev = i > 0 ? trace[i - 1]! : null;
 
-    // (B) Coverage gap with a ground touch.
+    // (B) Coverage gap with a ground touch — or any gap so long it can
+    // only be a leg break (helicopter at elevated heliport, cold airframe
+    // restart, etc.).
     if (prev) {
       const gapSec = point[0] - prev[0];
-      if (
+      const isLongGap = gapSec >= ADSBLOL_LONG_GAP_LEG_BREAK_THRESHOLD_SEC;
+      const isShortGapWithGroundTouch =
         gapSec >= ADSBLOL_LEG_BREAK_THRESHOLD_SEC &&
-        (isOnOrNearGround(prev) || isOnOrNearGround(point))
-      ) {
+        (isOnOrNearGround(prev) || isOnOrNearGround(point));
+      if (isLongGap || isShortGapWithGroundTouch) {
         if (isStationaryTracePoint(point)) {
           // Gap ended while still on the ground (cold-start, pre-takeoff
           // taxi, etc.). Defer the leg-start marker until takeoff.
           pendingLegBreak = true;
           stationaryStartIdx = null;
         } else {
-          // Gap ended airborne (rare — feeder coverage gap that resolved
-          // mid-air). New leg starts here.
+          // Gap ended airborne (post-gap takeoff, or coverage hole that
+          // resolved mid-air). New leg starts here.
           lastLegStartIdx = i;
           stationaryStartIdx = null;
           pendingLegBreak = false;
@@ -207,6 +223,95 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
   }
 
   return lastLegStartIdx === 0 ? trace : trace.slice(lastLegStartIdx);
+}
+
+// Why: each adsb.lol trace response carries its own `timestamp` base and
+// per-point offsets are relative to it. To merge full + recent we re-base
+// the recent points onto full's timestamp by shifting their offsets by
+// `recent.timestamp - full.timestamp` (positive when recent is newer,
+// which is the normal case).
+// Why: discriminated union so callers can distinguish "aircraft not in the
+// network" (404, cache empty) from "we got rate-limited" (don't cache,
+// retry after cooldown) from "we have data."
+type AdsbLolTraceVariantResult =
+  | { kind: "ok"; response: AdsbLolTraceResponse }
+  | { kind: "missing" }
+  | { kind: "rate-limited" };
+
+async function fetchAdsbLolTraceVariant(url: string): Promise<AdsbLolTraceVariantResult> {
+  const response = await fetch(url, {
+    cache: "no-store",
+    // Why: adsb.lol's CDN serves these files gzipped; node-fetch handles
+    // decompression automatically with this header. Be a polite client.
+    headers: { "User-Agent": "flight-tracker/0.1 (+ambient airspace)" }
+  });
+
+  if (response.status === 404) {
+    return { kind: "missing" };
+  }
+  if (response.status === 429) {
+    return { kind: "rate-limited" };
+  }
+  if (!response.ok) {
+    throw new Error(`adsb.lol trace request to ${url} failed with status ${response.status}`);
+  }
+
+  return { kind: "ok", response: (await response.json()) as AdsbLolTraceResponse };
+}
+
+function rebaseTracePoint(
+  point: AdsbLolTracePoint,
+  offsetDeltaSec: number
+): AdsbLolTracePoint {
+  return [
+    point[0] + offsetDeltaSec,
+    point[1],
+    point[2],
+    point[3],
+    point[4],
+    point[5],
+    point[6],
+    point[7],
+    point[8],
+    point[9]
+  ];
+}
+
+// Why: trace_full covers the full UTC day but its tail can lag the live
+// position by 20+ minutes — adsb.lol regenerates the file periodically,
+// not real-time. trace_recent is short (~last hour) and updated near
+// real-time (~30s lag). Merging gives us deep history AND a fresh tail.
+// Strategy: take all of full, then append recent points whose absolute
+// time is strictly later than full's last point. The trim-by-time merge
+// is order-preserving and avoids duplicates from the overlap window.
+function mergeTraceResponses(
+  full: AdsbLolTraceResponse | null,
+  recent: AdsbLolTraceResponse | null
+): AdsbLolTraceResponse | null {
+  if (!full && !recent) return null;
+  if (!full) return recent;
+  if (!recent || recent.trace.length === 0) return full;
+
+  if (full.trace.length === 0) {
+    return {
+      ...full,
+      trace: recent.trace.map((p) => rebaseTracePoint(p, recent.timestamp - full.timestamp))
+    };
+  }
+
+  const fullLast = full.trace[full.trace.length - 1]!;
+  const lastFullAbsoluteSec = full.timestamp + fullLast[0];
+  const offsetDeltaSec = recent.timestamp - full.timestamp;
+
+  const appended: AdsbLolTracePoint[] = [];
+  for (const point of recent.trace) {
+    const absoluteSec = recent.timestamp + point[0];
+    if (absoluteSec <= lastFullAbsoluteSec) continue;
+    appended.push(rebaseTracePoint(point, offsetDeltaSec));
+  }
+
+  if (appended.length === 0) return full;
+  return { ...full, trace: [...full.trace, ...appended] };
 }
 
 function convertTrace(response: AdsbLolTraceResponse): SelectedFlightTrackPoint[] {
@@ -259,36 +364,57 @@ export async function fetchAdsbLolSelectedFlightTrack(icao24: string): Promise<S
   }
 
   const request = (async (): Promise<SelectedFlightTrackPoint[]> => {
-    const url = `${ADSBLOL_TRACE_BASE}/${getBucket(normalized)}/trace_full_${normalized}.json`;
-    const response = await fetch(url, {
-      cache: "no-store",
-      // Why: adsb.lol's CDN serves these files gzipped; node-fetch handles
-      // decompression automatically with this header. Be a polite client.
-      headers: { "User-Agent": "flight-tracker/0.1 (+ambient airspace)" }
-    });
+    const bucket = getBucket(normalized);
+    const fullUrl = `${ADSBLOL_TRACE_BASE}/${bucket}/trace_full_${normalized}.json`;
+    const recentUrl = `${ADSBLOL_TRACE_BASE}/${bucket}/trace_recent_${normalized}.json`;
 
-    if (response.status === 404) {
-      // Aircraft not yet seen by their network — cache the negative
-      // answer briefly and move on.
+    // Why: trace_full's tail can lag the live position by tens of minutes
+    // because adsb.lol regenerates the daily file periodically, not in real
+    // time. trace_recent is small (~3 KB) and updated continuously. Fetch
+    // both in parallel — they're cheap and the merge gives us deep history
+    // PLUS a tail within ~1 min of live. Each is independently fault-tolerant:
+    // 404 => null, network error => null, rate-limit short-circuits both.
+    const [fullResult, recentResult] = await Promise.all([
+      fetchAdsbLolTraceVariant(fullUrl).catch((error) => {
+        console.error("adsb.lol trace_full fetch failed", error);
+        return { kind: "missing" } as const;
+      }),
+      fetchAdsbLolTraceVariant(recentUrl).catch((error) => {
+        console.error("adsb.lol trace_recent fetch failed", error);
+        return { kind: "missing" } as const;
+      })
+    ]);
+
+    if (fullResult.kind === "rate-limited" || recentResult.kind === "rate-limited") {
+      cooldownUntil = Date.now() + ADSBLOL_RATE_LIMIT_COOLDOWN_MS;
+      console.warn("adsb.lol rate-limited; backing off");
+      // Don't cache — we want to retry after cooldown rather than return
+      // empty for the full ADSBLOL_TRACE_NULL_TTL_MS window.
+      return [];
+    }
+
+    const full = fullResult.kind === "ok" ? fullResult.response : null;
+    const recent = recentResult.kind === "ok" ? recentResult.response : null;
+
+    if (!full && !recent) {
+      // Aircraft not seen by adsb.lol's network at all. Cache the negative
+      // briefly and move on.
       setCachedTrace(normalized, [], ADSBLOL_TRACE_NULL_TTL_MS);
       return [];
     }
 
-    if (response.status === 429) {
-      cooldownUntil = Date.now() + ADSBLOL_RATE_LIMIT_COOLDOWN_MS;
-      console.warn("adsb.lol rate-limited; backing off");
+    const merged = mergeTraceResponses(full, recent);
+    if (!merged || merged.trace.length === 0) {
+      setCachedTrace(normalized, [], ADSBLOL_TRACE_NULL_TTL_MS);
       return [];
     }
 
-    if (!response.ok) {
-      throw new Error(`adsb.lol trace request failed with status ${response.status}`);
-    }
-
-    const data = (await response.json()) as AdsbLolTraceResponse;
-    const track = convertTrace(data);
-
-    setCachedTrace(normalized, track, track.length > 0 ? ADSBLOL_TRACE_TTL_MS : ADSBLOL_TRACE_NULL_TTL_MS);
-
+    const track = convertTrace(merged);
+    setCachedTrace(
+      normalized,
+      track,
+      track.length > 0 ? ADSBLOL_TRACE_TTL_MS : ADSBLOL_TRACE_NULL_TTL_MS
+    );
     return track;
   })();
 

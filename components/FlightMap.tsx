@@ -140,6 +140,17 @@ const STRIP_HOVER_ECHO_DURATION_MS = 1400;
 const STRIP_HOVER_ECHO_BASE_RADIUS = 13;
 const STRIP_HOVER_ECHO_GROWTH = 14;
 const MAX_BREADCRUMB_OVERLAP_MILES = 0.18;
+// Why: when a new poll lands the breadcrumb is appended at the freshly
+// reported provider position INSTANTLY, while the icon starts a multi-second
+// lerp from its previous rendered position toward that same target. During
+// the lerp the breadcrumb sits at a position the icon hasn't visually reached
+// yet — so the rendered LineString goes (provider_track) → (breadcrumb_at_new_pos)
+// → (icon_at_lerp_pos), which paints a forward-then-back zigzag past the dot.
+// Filter breadcrumbs whose forward projection on the icon's heading exceeds
+// this tolerance — that drops the in-flight-lerp breadcrumbs without losing
+// behind-the-dot ones. ~8 m tolerance keeps the filter from oscillating on
+// rounding noise near zero.
+const BREADCRUMB_LEAD_TOLERANCE_MILES = 0.005;
 
 function buildRingCoordinates(center: HomeBaseCenter, radiusMiles: number, steps = 72) {
   const coordinates: [number, number][] = [];
@@ -760,6 +771,8 @@ function getBreadcrumbPoints(snapshots: FlightSnapshot[], flightId: string) {
   return sanitizeBreadcrumbPoints(points);
 }
 
+type TrackSegment = [number, number][];
+
 // Why: previously this function applied the `displayedProviderTimestampMs`
 // (the playback aircraft's interpolated position-time) as an upper bound on
 // every coordinate considered. In practice that culls AeroAPI track points
@@ -770,19 +783,27 @@ function getBreadcrumbPoints(snapshots: FlightSnapshot[], flightId: string) {
 //
 // Pipeline:
 //   1. Sanitize provider track points (drop teleports, dedupe).
-//   2. Append breadcrumbs collected client-side that fall AFTER the provider
-//      track's last timestamp (avoids duplicating points; bridges the gap
-//      between AeroAPI's track and the live present).
-//   3. Append the live (interpolated) aircraft position as the visual tail —
-//      but only when the trail's last data point is older than the icon's
-//      playback time, otherwise we'd backtrack from a fresh trail tip to a
-//      lagging icon position.
+//   2. Filter breadcrumbs collected client-side (cap, lead-projection,
+//      provider-overlap dedup).
+//   3. Decide topology: if the provider tail is close enough to the
+//      breadcrumb head, merge into one segment. Otherwise keep them as
+//      two separate LineString segments (rendered as multiple features)
+//      — avoids drawing a phantom 14-mi straight line through unverified
+//      airspace when adsb.lol's trace is stale relative to the live icon.
+//   4. Append the live (interpolated) aircraft position as the tail of the
+//      LAST segment — but only when the trail's last data point is older
+//      than the icon's playback time, otherwise we'd backtrack from a
+//      fresh trail tip to a lagging icon position.
+//
+// Returns: `TrackSegment[]` — array of disjoint polylines. The renderer
+// emits one LineString feature per segment.
 function getSanitizedTrackCoordinates(
   track: SelectedFlightDetailsResponse["details"] | null,
   breadcrumbPoints: BreadcrumbPoint[],
   renderedPosition: { latitude: number; longitude: number } | null,
-  displayedProviderTimestampMs: number | null
-) {
+  displayedProviderTimestampMs: number | null,
+  iconHeadingDegrees: number | null
+): TrackSegment[] {
   const providerTrack = track?.track ?? [];
   // Why: the trail tail can be marginally fresher than the animated icon's
   // playback position because the icon coasts off OpenSky/adsb.lol position
@@ -818,6 +839,38 @@ function getSanitizedTrackCoordinates(
   const isComprehensiveProviderTrack =
     track != null && track.faFlightId != null && providerTrack.length > 0;
 
+  // Why: the time-based cap below isn't enough on its own. For slow GA
+  // traffic (~60kt) a breadcrumb appended the moment a poll lands has a
+  // timestamp that *just barely* slips under the time-interpolated cap, so
+  // the cap doesn't filter it — but the icon hasn't lerped to that position
+  // yet, so the breadcrumb sits geographically AHEAD of the dot. This
+  // position-based filter rejects breadcrumbs whose forward projection on
+  // the icon's heading vector exceeds BREADCRUMB_LEAD_TOLERANCE_MILES,
+  // closing the visual "trail leads dot" zigzag during the lerp.
+  let breadcrumbLeadFilter:
+    | ((point: BreadcrumbPoint) => boolean)
+    | null = null;
+  if (renderedPosition && iconHeadingDegrees != null) {
+    const milesPerDegLat = 69.0;
+    const milesPerDegLon =
+      69.0 * Math.cos((renderedPosition.latitude * Math.PI) / 180);
+    const headingRad = (iconHeadingDegrees * Math.PI) / 180;
+    const sinHeading = Math.sin(headingRad);
+    const cosHeading = Math.cos(headingRad);
+    const iconLat = renderedPosition.latitude;
+    const iconLon = renderedPosition.longitude;
+    breadcrumbLeadFilter = (point) => {
+      const dEastMiles = (point.coordinate[0] - iconLon) * milesPerDegLon;
+      const dNorthMiles = (point.coordinate[1] - iconLat) * milesPerDegLat;
+      const aheadMiles = dNorthMiles * cosHeading + dEastMiles * sinHeading;
+      return aheadMiles <= BREADCRUMB_LEAD_TOLERANCE_MILES;
+    };
+  }
+
+  // ----- Build provider segment + filter breadcrumbs -----
+  const providerSegment: TrackSegment = sanitizedCoordinates;
+
+  let breadcrumbCoordinates: TrackSegment = [];
   if (breadcrumbPoints.length > 0) {
     const eligibleBreadcrumbs = breadcrumbPoints.filter((point) => {
       // Cap breadcrumbs at the icon's playback time too, same reason as
@@ -832,6 +885,11 @@ function getSanitizedTrackCoordinates(
       ) {
         return false;
       }
+      // Position-based "ahead of icon" filter — see the comment above the
+      // breadcrumbLeadFilter block.
+      if (breadcrumbLeadFilter && !breadcrumbLeadFilter(point)) {
+        return false;
+      }
       return (
         !isComprehensiveProviderTrack ||
         lastProviderTrackTimestampMs == null ||
@@ -839,47 +897,7 @@ function getSanitizedTrackCoordinates(
         point.providerTimestampSec * 1000 > lastProviderTrackTimestampMs
       );
     });
-    const breadcrumbCoordinates = eligibleBreadcrumbs.map((point) => point.coordinate);
-
-    if (sanitizedCoordinates.length === 0) {
-      sanitizedCoordinates.push(...breadcrumbCoordinates);
-    } else {
-      const providerTail = sanitizedCoordinates[sanitizedCoordinates.length - 1]!;
-      const trimmedBreadcrumbCoordinates = [...breadcrumbCoordinates];
-
-      // Skip breadcrumbs that overlap the provider tail (avoid duplicate
-      // coordinates packed inside the rendering tolerance).
-      while (trimmedBreadcrumbCoordinates.length > 0) {
-        const breadcrumbHead = trimmedBreadcrumbCoordinates[0]!;
-        const connectorMiles = distanceBetweenPointsMiles({
-          fromLatitude: providerTail[1],
-          fromLongitude: providerTail[0],
-          toLatitude: breadcrumbHead[1],
-          toLongitude: breadcrumbHead[0]
-        });
-
-        if (connectorMiles > MAX_BREADCRUMB_OVERLAP_MILES) {
-          break;
-        }
-
-        trimmedBreadcrumbCoordinates.shift();
-      }
-
-      const breadcrumbHead = trimmedBreadcrumbCoordinates[0];
-
-      if (breadcrumbHead) {
-        const connectorMiles = distanceBetweenPointsMiles({
-          fromLatitude: providerTail[1],
-          fromLongitude: providerTail[0],
-          toLatitude: breadcrumbHead[1],
-          toLongitude: breadcrumbHead[0]
-        });
-
-        if (connectorMiles <= MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES) {
-          sanitizedCoordinates.push(...trimmedBreadcrumbCoordinates);
-        }
-      }
-    }
+    breadcrumbCoordinates = eligibleBreadcrumbs.map((point) => point.coordinate);
 
     const latestBreadcrumbTimestampSec = eligibleBreadcrumbs.reduce<number | null>(
       (latest, point) =>
@@ -895,61 +913,115 @@ function getSanitizedTrackCoordinates(
     }
   }
 
-  if (sanitizedCoordinates.length < 2 && !renderedPosition) {
-    return [];
+  // ----- Decide topology -----
+  // Three cases:
+  //   (1) Both provider segment and breadcrumbs have data.
+  //       → Strip breadcrumb prefix that overlaps the provider tail.
+  //         If the bridge gap is short, concatenate into one segment.
+  //         If it's long, keep them as two disjoint segments.
+  //   (2) Only one side has data → it's the only segment.
+  //   (3) Neither has data → no segments.
+  const segments: TrackSegment[] = [];
+  if (providerSegment.length > 0 && breadcrumbCoordinates.length > 0) {
+    const providerTail = providerSegment[providerSegment.length - 1]!;
+    const trimmedBreadcrumbs: TrackSegment = [...breadcrumbCoordinates];
+
+    // Strip breadcrumbs that overlap the provider tail (within rendering
+    // tolerance) — avoids drawing a tiny zigzag at the join.
+    while (trimmedBreadcrumbs.length > 0) {
+      const head = trimmedBreadcrumbs[0]!;
+      const dist = distanceBetweenPointsMiles({
+        fromLatitude: providerTail[1],
+        fromLongitude: providerTail[0],
+        toLatitude: head[1],
+        toLongitude: head[0]
+      });
+      if (dist > MAX_BREADCRUMB_OVERLAP_MILES) break;
+      trimmedBreadcrumbs.shift();
+    }
+
+    const breadcrumbHead = trimmedBreadcrumbs[0];
+    if (!breadcrumbHead) {
+      // All breadcrumbs were overlap dupes; just use the provider segment.
+      segments.push(providerSegment);
+    } else {
+      const connectorMiles = distanceBetweenPointsMiles({
+        fromLatitude: providerTail[1],
+        fromLongitude: providerTail[0],
+        toLatitude: breadcrumbHead[1],
+        toLongitude: breadcrumbHead[0]
+      });
+      if (connectorMiles <= MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES) {
+        // Bridge is short enough — merge into one continuous segment.
+        segments.push([...providerSegment, ...trimmedBreadcrumbs]);
+      } else {
+        // Bridge is too long to draw a credible straight line. Keep them
+        // as two separate polylines so the user sees both the historical
+        // trail AND the live segment near the icon, without a phantom
+        // line through unverified airspace.
+        segments.push(providerSegment);
+        segments.push(trimmedBreadcrumbs);
+      }
+    }
+  } else if (providerSegment.length > 0) {
+    segments.push(providerSegment);
+  } else if (breadcrumbCoordinates.length > 0) {
+    segments.push(breadcrumbCoordinates);
   }
 
-  if (!renderedPosition) {
-    return sanitizedCoordinates;
+  // ----- Append the icon as the tail of the LAST segment -----
+  // Skip when the trail's last data point is fresher than the icon's
+  // playback time (would draw a backwards segment from a fresh tip), or
+  // when the gap is too wide (would draw a phantom long jump).
+  if (renderedPosition) {
+    const tailPoint: [number, number] = [
+      renderedPosition.longitude,
+      renderedPosition.latitude
+    ];
+    const trailIsAheadOfIcon =
+      trailEndTimestampMs != null &&
+      displayedProviderTimestampMs != null &&
+      trailEndTimestampMs > displayedProviderTimestampMs;
+
+    if (segments.length === 0) {
+      // Only the icon — can't draw a line from a single point. Drop.
+    } else if (!trailIsAheadOfIcon) {
+      const lastSegment = segments[segments.length - 1]!;
+      const lastCoordinate = lastSegment[lastSegment.length - 1]!;
+      const tailSegmentMiles = distanceBetweenPointsMiles({
+        fromLatitude: lastCoordinate[1],
+        fromLongitude: lastCoordinate[0],
+        toLatitude: tailPoint[1],
+        toLongitude: tailPoint[0]
+      });
+      if (
+        tailSegmentMiles <= MAX_TRACK_TO_AIRCRAFT_MILES &&
+        (lastCoordinate[0] !== tailPoint[0] || lastCoordinate[1] !== tailPoint[1])
+      ) {
+        lastSegment.push(tailPoint);
+      }
+    }
   }
 
-  const lastCoordinate = sanitizedCoordinates[sanitizedCoordinates.length - 1];
-  const tailPoint: [number, number] = [renderedPosition.longitude, renderedPosition.latitude];
-
-  // Skip the live-tail append when the trail's last data point is fresher
-  // than the icon's playback time — appending the lagging icon position
-  // would draw a backwards segment from a fresh tip.
-  const trailIsAheadOfIcon =
-    trailEndTimestampMs != null &&
-    displayedProviderTimestampMs != null &&
-    trailEndTimestampMs > displayedProviderTimestampMs;
-
-  if (trailIsAheadOfIcon) {
-    return sanitizedCoordinates.length >= 2 ? sanitizedCoordinates : [];
-  }
-
-  if (!lastCoordinate) {
-    // Only the icon — can't draw a line from a single point. Bail.
-    return [];
-  }
-
-  const tailSegmentMiles = distanceBetweenPointsMiles({
-    fromLatitude: lastCoordinate[1],
-    fromLongitude: lastCoordinate[0],
-    toLatitude: tailPoint[1],
-    toLongitude: tailPoint[0]
-  });
-
-  if (tailSegmentMiles > MAX_TRACK_TO_AIRCRAFT_MILES) {
-    return sanitizedCoordinates.length >= 2 ? sanitizedCoordinates : [];
-  }
-
-  if (lastCoordinate[0] !== tailPoint[0] || lastCoordinate[1] !== tailPoint[1]) {
-    sanitizedCoordinates.push(tailPoint);
-  }
-
-  return sanitizedCoordinates.length >= 2 ? sanitizedCoordinates : [];
+  // Drop any segments shorter than 2 points — can't render a line from one.
+  return segments.filter((segment) => segment.length >= 2);
 }
 
-function hashTrackCoordinates(coordinates: [number, number][]) {
-  // Why: shape + last-3-points fingerprint is enough for our case — if any
-  // earlier coord changes the line is being rebuilt entirely (length differs).
-  if (coordinates.length === 0) {
+function hashTrackSegments(segments: TrackSegment[]) {
+  // Why: shape + per-segment head/tail fingerprint. Sufficient for our
+  // dedup case — if any earlier coord changes, segment length differs and
+  // the hash flips.
+  if (segments.length === 0) {
     return "0";
   }
-  const head = coordinates[0]!;
-  const tail = coordinates[coordinates.length - 1]!;
-  return `${coordinates.length}|${head[0]},${head[1]}|${tail[0]},${tail[1]}`;
+  return segments
+    .map((coords) => {
+      if (coords.length === 0) return "e";
+      const head = coords[0]!;
+      const tail = coords[coords.length - 1]!;
+      return `${coords.length}|${head[0]},${head[1]}|${tail[0]},${tail[1]}`;
+    })
+    .join("/");
 }
 
 const trackSourceLastHashBySource = new WeakMap<GeoJSONSource, string>();
@@ -968,7 +1040,8 @@ function setSelectedTrackSourceData(
   track: SelectedFlightDetailsResponse["details"] | null,
   breadcrumbPoints: BreadcrumbPoint[],
   renderedPosition: { latitude: number; longitude: number } | null,
-  displayedProviderTimestampMs: number | null
+  displayedProviderTimestampMs: number | null,
+  iconHeadingDegrees: number | null
 ) {
   if (!source) {
     return;
@@ -977,21 +1050,22 @@ function setSelectedTrackSourceData(
   const lastSelectionId = trackSourceLastSelectionId.get(source) ?? null;
   const isSelectionChange = lastSelectionId !== selectionId;
 
-  const coordinates = getSanitizedTrackCoordinates(
+  const segments = getSanitizedTrackCoordinates(
     track,
     breadcrumbPoints,
     renderedPosition,
-    displayedProviderTimestampMs
+    displayedProviderTimestampMs,
+    iconHeadingDegrees
   );
 
   // Within the same selection, refuse to wipe the trail: a transient empty
   // recompute (e.g., breadcrumbs collapsed to a single dedup'd point while
   // we wait for the fetch to land) shouldn't erase what was last drawn.
-  if (coordinates.length < 2 && !isSelectionChange) {
+  if (segments.length === 0 && !isSelectionChange) {
     return;
   }
 
-  const nextHash = hashTrackCoordinates(coordinates);
+  const nextHash = hashTrackSegments(segments);
   if (
     !isSelectionChange &&
     trackSourceLastHashBySource.get(source) === nextHash
@@ -1003,19 +1077,14 @@ function setSelectedTrackSourceData(
 
   source.setData({
     type: "FeatureCollection",
-    features:
-      coordinates.length >= 2
-        ? [
-            {
-              type: "Feature",
-              geometry: {
-                type: "LineString",
-                coordinates
-              },
-              properties: {}
-            }
-          ]
-        : []
+    features: segments.map((coordinates) => ({
+      type: "Feature" as const,
+      geometry: {
+        type: "LineString" as const,
+        coordinates
+      },
+      properties: {}
+    }))
   });
 }
 
@@ -3013,6 +3082,11 @@ export function FlightMap() {
     const flightSource = source;
     const trackSource = mapRef.current?.getSource("selected-track") as GeoJSONSource | undefined;
 
+    // [trail-debug] Throttle for the optional in-frame diagnostic. Toggle with
+    // `window.__TRAIL_DEBUG = true` in DevTools to surface the icon vs trail-tip
+    // relationship for the selected flight at ~1 Hz.
+    let trailDebugLastLogAtMs = 0;
+
     function renderFrame(frameTime: number) {
       const playbackSnapshots = snapshotHistoryRef.current;
       const animationStates = flightAnimationStatesRef.current;
@@ -3107,9 +3181,195 @@ export function FlightMap() {
           activeSelectedTrack,
           activeBreadcrumbPoints,
           selectedRenderedPosition,
-          selectedDisplayedProviderTimestampMs
+          selectedDisplayedProviderTimestampMs,
+          selectedAnimationState?.targetHeadingDegrees ?? null
         );
       }
+
+      // [trail-debug] Optional diagnostic. Enable in DevTools console:
+      //   window.__TRAIL_DEBUG = true
+      // Logs the selected flight's icon position, the cap timestamp, the
+      // cap-filtered provider trail tip, and a signed "ahead" projection of
+      // (trailTip - icon) onto the icon's heading vector. Positive aheadMiles
+      // means the trail tip is geographically ahead of the icon along its
+      // direction of travel — that's the "trail leading the dot" signature.
+      // Cast to widen the union — TS narrows `selectedRenderedPosition` to
+      // the `null` literal because the only assignment site is inside a `.map`
+      // callback, which control-flow analysis can't track. The cast restores
+      // the declared union so the `!= null` check below narrows correctly.
+      const debugIconPosition = selectedRenderedPosition as
+        | { latitude: number; longitude: number }
+        | null;
+      if (
+        typeof window !== "undefined" &&
+        (window as unknown as { __TRAIL_DEBUG?: boolean }).__TRAIL_DEBUG === true &&
+        selectedId != null &&
+        debugIconPosition != null &&
+        frameTime - trailDebugLastLogAtMs > 1000
+      ) {
+        trailDebugLastLogAtMs = frameTime;
+
+        const animState = selectedAnimationState;
+        const cap = selectedDisplayedProviderTimestampMs;
+        const providerTrack = activeSelectedTrack?.track ?? [];
+
+        // Walk from the end to find the latest provider point still allowed by
+        // the cap — that's the trail's actual visible tip.
+        let trailTip: { lat: number; lon: number; tMs: number } | null = null;
+        for (let i = providerTrack.length - 1; i >= 0; i -= 1) {
+          const point = providerTrack[i]!;
+          const tMs = Date.parse(point.timestamp);
+          if (!Number.isFinite(tMs)) continue;
+          if (cap == null || tMs <= cap) {
+            trailTip = { lat: point.latitude, lon: point.longitude, tMs };
+            break;
+          }
+        }
+
+        const progress = animState ? getAnimationProgress(animState, frameTime) : null;
+        const phase =
+          progress == null ? "no-animation" : progress < 1 ? "lerping" : "coasting";
+
+        // Helper: project a (lat, lon) point onto the icon's heading vector.
+        // Returns signed miles ahead of the icon (positive = beyond the dot).
+        // Snapshot the icon coords here so TS narrowing isn't lost inside the
+        // nested function.
+        const iconLat = debugIconPosition.latitude;
+        const iconLon = debugIconPosition.longitude;
+        const heading = animState?.targetHeadingDegrees;
+        const milesPerDegLat = 69.0;
+        const milesPerDegLon = 69.0 * Math.cos((iconLat * Math.PI) / 180);
+        const headingRad = heading != null ? (heading * Math.PI) / 180 : null;
+        function aheadOfIconMiles(lat: number, lon: number): number | null {
+          if (headingRad == null) return null;
+          const dEastMiles = (lon - iconLon) * milesPerDegLon;
+          const dNorthMiles = (lat - iconLat) * milesPerDegLat;
+          return (
+            dNorthMiles * Math.cos(headingRad) + dEastMiles * Math.sin(headingRad)
+          );
+        }
+
+        let trailToIconMiles: number | null = null;
+        let aheadMiles: number | null = null;
+        if (trailTip) {
+          trailToIconMiles = distanceBetweenPointsMiles({
+            fromLatitude: debugIconPosition.latitude,
+            fromLongitude: debugIconPosition.longitude,
+            toLatitude: trailTip.lat,
+            toLongitude: trailTip.lon
+          });
+          aheadMiles = aheadOfIconMiles(trailTip.lat, trailTip.lon);
+        }
+
+        // Breadcrumb tip: client-accumulated points (one per /api/flights poll
+        // for as long as we've been watching this flight). These stitch the
+        // gap between a stale provider track tip and the live icon.
+        const breadcrumbs = activeBreadcrumbPoints;
+        const breadcrumbTip =
+          breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1]! : null;
+        const breadcrumbTipAheadMiles = breadcrumbTip
+          ? aheadOfIconMiles(breadcrumbTip.coordinate[1], breadcrumbTip.coordinate[0])
+          : null;
+
+        // Actually run the same pipeline that paints the line, then inspect
+        // its last few coordinates. The very last one should be the icon
+        // (live-tail append). The second-to-last is the relevant "is the
+        // line zigzagging forward past the dot and back?" signal.
+        const paintedSegments = getSanitizedTrackCoordinates(
+          activeSelectedTrack,
+          breadcrumbs,
+          debugIconPosition,
+          cap,
+          animState?.targetHeadingDegrees ?? null
+        );
+        // The icon-tail-append (when it fires) goes onto the last segment,
+        // so the last segment's tip + prev are the diagnostic-relevant ones.
+        const paintedLastSegment =
+          paintedSegments.length > 0
+            ? paintedSegments[paintedSegments.length - 1]!
+            : null;
+        const paintedTip =
+          paintedLastSegment && paintedLastSegment.length > 0
+            ? paintedLastSegment[paintedLastSegment.length - 1]!
+            : null;
+        const paintedPrev =
+          paintedLastSegment && paintedLastSegment.length > 1
+            ? paintedLastSegment[paintedLastSegment.length - 2]!
+            : null;
+        const paintedTipAheadMiles = paintedTip
+          ? aheadOfIconMiles(paintedTip[1], paintedTip[0])
+          : null;
+        const paintedPrevAheadMiles = paintedPrev
+          ? aheadOfIconMiles(paintedPrev[1], paintedPrev[0])
+          : null;
+        const paintedTotalCoordCount = paintedSegments.reduce(
+          (sum, seg) => sum + seg.length,
+          0
+        );
+
+        // Format as a single flat string so the relevant fields are visible
+        // without expanding objects in DevTools — easier to copy/paste back.
+        const fmt = (v: number | null, digits = 4) =>
+          v == null ? "null" : v.toFixed(digits);
+        const providerDelta =
+          animState?.lastProviderTimestampSec != null &&
+          animState?.previousProviderTimestampSec != null
+            ? animState.lastProviderTimestampSec -
+              animState.previousProviderTimestampSec
+            : null;
+        const capRelLast =
+          cap != null && animState?.lastProviderTimestampSec != null
+            ? cap / 1000 - animState.lastProviderTimestampSec
+            : null;
+
+        const trailTipStr = trailTip
+          ? `(${fmt(trailTip.lat, 5)},${fmt(trailTip.lon, 5)}) capMinusTip=${
+              cap != null ? fmt((cap - trailTip.tMs) / 1000, 1) : "null"
+            }s ahead=${fmt(aheadMiles, 3)}mi`
+          : "null";
+
+        const bcTipStr = breadcrumbTip
+          ? `(${fmt(breadcrumbTip.coordinate[1], 5)},${fmt(
+              breadcrumbTip.coordinate[0],
+              5
+            )}) capMinusTip=${
+              cap != null && breadcrumbTip.providerTimestampSec != null
+                ? fmt(
+                    cap / 1000 - breadcrumbTip.providerTimestampSec,
+                    1
+                  )
+                : "null"
+            }s ahead=${fmt(breadcrumbTipAheadMiles, 3)}mi`
+          : "null";
+
+        const paintedTipStr = paintedTip
+          ? `(${fmt(paintedTip[1], 5)},${fmt(paintedTip[0], 5)}) ahead=${fmt(
+              paintedTipAheadMiles,
+              3
+            )}mi`
+          : "null";
+
+        const paintedPrevStr = paintedPrev
+          ? `(${fmt(paintedPrev[1], 5)},${fmt(paintedPrev[0], 5)}) ahead=${fmt(
+              paintedPrevAheadMiles,
+              3
+            )}mi`
+          : "null";
+
+        const summary =
+          `[trail-debug] sel=${selectedId} phase=${phase} prog=${fmt(progress, 3)} ` +
+          `icon=(${fmt(iconLat, 5)},${fmt(iconLon, 5)}) ` +
+          `heading=${fmt(animState?.targetHeadingDegrees ?? null, 1)}° ` +
+          `gs=${fmt(animState?.targetGroundspeedKnots ?? null, 0)}kt ` +
+          `capRelLast=${fmt(capRelLast, 2)}s providerDelta=${fmt(providerDelta, 1)}s | ` +
+          `provTrack(n=${providerTrack.length}) tip=${trailTipStr} | ` +
+          `breadcrumbs(n=${breadcrumbs.length}) tip=${bcTipStr} | ` +
+          `painted(segs=${paintedSegments.length}, coords=${paintedTotalCoordCount}) tip=${paintedTipStr} prev=${paintedPrevStr}`;
+
+        // eslint-disable-next-line no-console
+        console.log(summary);
+      }
+
       selectedRenderedPositionRef.current = selectedRenderedPosition;
 
       animationFrameRef.current = requestAnimationFrame(renderFrame);
@@ -3161,7 +3421,8 @@ export function FlightMap() {
         performance.now()
       ),
       selectedRenderedPositionRef.current,
-      selectedDisplayedProviderTimestampMs
+      selectedDisplayedProviderTimestampMs,
+      selectedAnimationState?.targetHeadingDegrees ?? null
     );
   }, [activeSelectedFlightDetails, mapReady, selectedFlightId]);
 
