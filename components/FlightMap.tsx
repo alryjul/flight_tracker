@@ -82,6 +82,11 @@ type BreadcrumbPoint = {
   providerTimestampSec: number | null;
 };
 
+type FlightBreadcrumbBuffer = {
+  points: BreadcrumbPoint[];
+  lastSeenAt: number;
+};
+
 type SelectedTrackPoint = NonNullable<SelectedFlightDetailsResponse["details"]>["track"][number];
 
 type TrendDirection = "up" | "down" | null;
@@ -108,6 +113,14 @@ const STRIP_REORDER_RANK_THRESHOLD = 2;
 const STRIP_REORDER_SCORE_THRESHOLD = 1.25;
 const STRIP_RANK_CUE_MS = 2200;
 const SNAPSHOT_HISTORY_RETENTION_MS = refreshMs * 18;
+// Why: snapshot history is pruned aggressively (72s) because it drives
+// animation interpolation and per-poll change detection — it doesn't need
+// long memory. But the *selected flight's* breadcrumb trail benefits from
+// far more history: a hovering GA helicopter watched for 20 minutes should
+// still show its flight path, not just the last 72s. The per-flight buffer
+// below is independent of the snapshot pruning.
+const FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS = 600;
+const FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS = 1000 * 60 * 30;
 const SELECTED_TRACK_REFRESH_GRACE_MS = 1000 * 30;
 const MAX_TRACK_SEGMENT_MILES = 320;
 const MAX_TRACK_TO_AIRCRAFT_MILES = 2.5;
@@ -702,25 +715,18 @@ function sanitizeCoordinateSequence(coordinates: [number, number][]) {
   return sanitizedCoordinates;
 }
 
-// Why: only filter by physical id (icao24). Callsign changes mid-session
-// (Mode-S transponder updates, ATC re-coding) used to drop pre-change
-// breadcrumbs from the trail even though they were the same physical
-// aircraft. ICAO24 is permanent per airframe; the callsign is metadata.
-function getBreadcrumbPoints(snapshots: FlightSnapshot[], flightId: string) {
-  const points = snapshots
-    .map((snapshot) => snapshot.flightsById.get(flightId))
-    .filter((flight): flight is Flight => flight != null)
-    .map((flight) => ({
-      coordinate: [flight.longitude, flight.latitude] as [number, number],
-      providerTimestampSec: getFlightProviderTimestampSec(flight)
-    }));
+// Why: shared helper for both the legacy snapshot-derived breadcrumbs and the
+// new persistent per-flight buffer. Sanitizes the coordinate sequence
+// (dedup + teleport tolerance) and re-attaches the original timestamps.
+function sanitizeBreadcrumbPoints(rawPoints: BreadcrumbPoint[]) {
+  if (rawPoints.length === 0) return [];
 
-  const sanitizedCoordinates = sanitizeCoordinateSequence(points.map((point) => point.coordinate));
+  const sanitizedCoordinates = sanitizeCoordinateSequence(
+    rawPoints.map((point) => point.coordinate)
+  );
 
-  // Why: avoid an O(snapshots × sanitized) .find() inside .map() — index by
-  // a stringified coordinate key once, then look up in O(1).
   const pointsByCoordinate = new Map<string, BreadcrumbPoint["providerTimestampSec"]>();
-  for (const point of points) {
+  for (const point of rawPoints) {
     const key = `${point.coordinate[0]},${point.coordinate[1]}`;
     if (!pointsByCoordinate.has(key)) {
       pointsByCoordinate.set(key, point.providerTimestampSec);
@@ -736,6 +742,22 @@ function getBreadcrumbPoints(snapshots: FlightSnapshot[], flightId: string) {
     }
   }
   return breadcrumbs;
+}
+
+// Why: only filter by physical id (icao24). Callsign changes mid-session
+// (Mode-S transponder updates, ATC re-coding) used to drop pre-change
+// breadcrumbs from the trail even though they were the same physical
+// aircraft. ICAO24 is permanent per airframe; the callsign is metadata.
+function getBreadcrumbPoints(snapshots: FlightSnapshot[], flightId: string) {
+  const points = snapshots
+    .map((snapshot) => snapshot.flightsById.get(flightId))
+    .filter((flight): flight is Flight => flight != null)
+    .map((flight) => ({
+      coordinate: [flight.longitude, flight.latitude] as [number, number],
+      providerTimestampSec: getFlightProviderTimestampSec(flight)
+    }));
+
+  return sanitizeBreadcrumbPoints(points);
 }
 
 // Why: previously this function applied the `displayedProviderTimestampMs`
@@ -1711,6 +1733,9 @@ export function FlightMap() {
   const flightAnimationStatesRef = useRef<Map<string, FlightAnimationState>>(new Map());
   const flightIdentityByIdRef = useRef<Map<string, string>>(new Map());
   const snapshotHistoryRef = useRef<FlightSnapshot[]>([]);
+  // Persistent per-flight breadcrumb buffer. Outlives the 72s snapshot
+  // pruning so the trailing edge of a long-watched trail doesn't shrink.
+  const flightBreadcrumbsRef = useRef<Map<string, FlightBreadcrumbBuffer>>(new Map());
   const selectedTrackFreshAtByIdRef = useRef<Map<string, number>>(new Map());
   const stripElementRefs = useRef(new Map<string, HTMLButtonElement>());
   const previousStripPositionsRef = useRef<Map<string, DOMRect>>(new Map());
@@ -2356,6 +2381,7 @@ export function FlightMap() {
 
     snapshotHistoryRef.current = [];
     flightAnimationStatesRef.current = new Map();
+    flightBreadcrumbsRef.current = new Map();
 
     async function loadFlights() {
       const requestId = requestSequence + 1;
@@ -2435,6 +2461,32 @@ export function FlightMap() {
             flightsById: new Map(stabilizedFlights.map((flight) => [flight.id, flight]))
           }
         ].filter((snapshot) => capturedAt - snapshot.capturedAt <= SNAPSHOT_HISTORY_RETENTION_MS);
+
+        // Append to the persistent per-flight breadcrumb buffer so the
+        // selected flight's trail can outlive the 72s snapshot pruning.
+        const wallNow = Date.now();
+        const seenIds = new Set<string>();
+        for (const flight of stabilizedFlights) {
+          seenIds.add(flight.id);
+          let buffer = flightBreadcrumbsRef.current.get(flight.id);
+          if (!buffer) {
+            buffer = { points: [], lastSeenAt: wallNow };
+            flightBreadcrumbsRef.current.set(flight.id, buffer);
+          }
+          buffer.points.push({
+            coordinate: [flight.longitude, flight.latitude],
+            providerTimestampSec: getFlightProviderTimestampSec(flight)
+          });
+          if (buffer.points.length > FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS) {
+            buffer.points.splice(0, buffer.points.length - FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS);
+          }
+          buffer.lastSeenAt = wallNow;
+        }
+        for (const [id, buffer] of flightBreadcrumbsRef.current) {
+          if (!seenIds.has(id) && wallNow - buffer.lastSeenAt > FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS) {
+            flightBreadcrumbsRef.current.delete(id);
+          }
+        }
       }
     }
 
@@ -2946,7 +2998,9 @@ export function FlightMap() {
         selectedId == null
           ? []
           : clipBreadcrumbCoordinatesToAnimation(
-              getBreadcrumbPoints(playbackSnapshots, selectedId),
+              sanitizeBreadcrumbPoints(
+                flightBreadcrumbsRef.current.get(selectedId)?.points ?? []
+              ),
               selectedAnimationState,
               frameTime
             );
@@ -3048,7 +3102,9 @@ export function FlightMap() {
       selectedId,
       activeSelectedTrack,
       clipBreadcrumbCoordinatesToAnimation(
-        getBreadcrumbPoints(snapshotHistoryRef.current, selectedId),
+        sanitizeBreadcrumbPoints(
+          flightBreadcrumbsRef.current.get(selectedId)?.points ?? []
+        ),
         selectedAnimationState,
         performance.now()
       ),
