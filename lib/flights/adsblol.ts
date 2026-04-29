@@ -102,11 +102,37 @@ function isStationaryTracePoint(point: AdsbLolTracePoint) {
   return onGroundOrLow && slow;
 }
 
+// Why: a point reported as "ground" or below ~200 ft is, for our purposes,
+// "the aircraft has landed / is on the surface." Used by the gap-based leg
+// break detector to distinguish parking gaps (engine off, ADS-B silent on
+// the ramp) from cruise gaps (over-ocean feeder coverage holes).
+function isOnOrNearGround(point: AdsbLolTracePoint) {
+  const altitude = point[3];
+  return (
+    altitude === "ground" ||
+    (typeof altitude === "number" && Number.isFinite(altitude) && altitude < 200)
+  );
+}
+
 // Why: trace_full covers the entire UTC day. For an airframe that's flown
-// multiple legs today, we only want the *current* leg's path. Walk the trace
-// forward; whenever we see a stationary segment >= ADSBLOL_LEG_BREAK_THRESHOLD_SEC
-// followed by an active point, treat that active point as the start of a
-// new leg. The most recent such leg start is where we slice from.
+// multiple legs today, we only want the *current* leg's path.
+//
+// Two leg-break signals, both required for robust helicopter + airline
+// coverage:
+//
+//   (A) **Sustained stationary** — a run of consecutive points marked
+//       on-ground / low-alt and slow, lasting >= 15 min. This catches
+//       aircraft that keep transmitting while parked (most airliners on
+//       the ramp).
+//
+//   (B) **Coverage gap with a ground touch** — a >= 15 min wall-clock gap
+//       between consecutive trace points, where AT LEAST ONE side of the
+//       gap is on or near the ground. This catches aircraft that shut down
+//       between flights and stop transmitting entirely (most helicopters,
+//       light GA, some regional jets). The ground-touch requirement
+//       prevents long over-ocean cruise gaps from being mistaken for leg
+//       breaks — SIA7402 had a 459-min Pacific gap at 33k -> 37k feet that
+//       was a single continuous flight, not a leg break.
 function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
   if (trace.length === 0) return trace;
 
@@ -115,9 +141,23 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
 
   for (let i = 0; i < trace.length; i += 1) {
     const point = trace[i]!;
-    const isStationary = isStationaryTracePoint(point);
+    const prev = i > 0 ? trace[i - 1]! : null;
 
-    if (isStationary) {
+    // (B) Coverage gap with a ground touch.
+    if (prev) {
+      const gapSec = point[0] - prev[0];
+      if (
+        gapSec >= ADSBLOL_LEG_BREAK_THRESHOLD_SEC &&
+        (isOnOrNearGround(prev) || isOnOrNearGround(point))
+      ) {
+        lastLegStartIdx = i;
+        stationaryStartIdx = null;
+        continue;
+      }
+    }
+
+    // (A) Sustained stationary run.
+    if (isStationaryTracePoint(point)) {
       if (stationaryStartIdx === null) {
         stationaryStartIdx = i;
       }
@@ -127,7 +167,6 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
     if (stationaryStartIdx !== null) {
       const stationaryDurationSec = point[0] - trace[stationaryStartIdx]![0];
       if (stationaryDurationSec >= ADSBLOL_LEG_BREAK_THRESHOLD_SEC) {
-        // Takeoff after sustained ground period — this is a fresh leg.
         lastLegStartIdx = i;
       }
       stationaryStartIdx = null;
