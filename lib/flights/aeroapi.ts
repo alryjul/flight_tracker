@@ -1,3 +1,7 @@
+import {
+  parseLatLonPseudoCode,
+  reverseGeocodeLocationLabel
+} from "@/lib/flights/reverseGeocode";
 import { getDiscoveryScore } from "@/lib/flights/scoring";
 import type { Flight } from "@/lib/flights/types";
 
@@ -219,18 +223,6 @@ function getAeroApiHeaders() {
   };
 }
 
-// Why: when an aircraft takes off from or lands at a non-airport location
-// (heliport, field, ad-hoc spot — common for LAPD/news helos, medevac,
-// charter), AeroAPI emits the origin/destination as a lat/lon pseudo-code
-// in the `code` field, formatted "L <lat> <lon>" (e.g., "L 34.15752 -118.20980").
-// The IATA/ICAO fields are null in this case. Surfacing that raw string in
-// the UI as "From L 34.15752 -118.20980" is unhelpful — it's not an airport
-// the user can look up. Strip it; the route fallback ("VFR" / "Route
-// pending") is more honest about what we know.
-function isLatLonPseudoCode(code: string) {
-  return /^L\s+-?\d+(\.\d+)?\s+-?\d+(\.\d+)?$/.test(code.trim());
-}
-
 function normalizeAirportCode(input: {
   code: string | null;
   code_iata: string | null;
@@ -239,8 +231,42 @@ function normalizeAirportCode(input: {
   if (!input) {
     return null;
   }
-  const fallback = input.code && !isLatLonPseudoCode(input.code) ? input.code : null;
-  return input.code_iata || input.code_icao || fallback || null;
+  // IATA/ICAO always preferred when present.
+  if (input.code_iata) return input.code_iata;
+  if (input.code_icao) return input.code_icao;
+  // Bare `code` is fine UNLESS it's the lat/lon pseudo-code AeroAPI emits
+  // for non-airport origins (heliports, ad-hoc spots). Those get resolved
+  // separately via resolveAirportOrLocationLabel — return null here so
+  // the resolver kicks in.
+  if (input.code && parseLatLonPseudoCode(input.code) == null) {
+    return input.code;
+  }
+  return null;
+}
+
+// Why: AeroAPI emits "L <lat> <lon>" pseudo-codes for non-airport origins
+// (heliports, helipads, fields). Reverse-geocode those into a human label
+// like "Hollywood Hills" or "Cedars-Sinai" so the UI shows useful info
+// instead of dropping the data. IATA/ICAO airports take priority and skip
+// the geocode call.
+async function resolveAirportOrLocationLabel(
+  input: {
+    code: string | null;
+    code_iata: string | null;
+    code_icao: string | null;
+  } | null
+): Promise<string | null> {
+  if (!input) return null;
+  if (input.code_iata) return input.code_iata;
+  if (input.code_icao) return input.code_icao;
+  if (input.code) {
+    const coords = parseLatLonPseudoCode(input.code);
+    if (coords) {
+      return await reverseGeocodeLocationLabel(coords.latitude, coords.longitude);
+    }
+    return input.code;
+  }
+  return null;
 }
 
 function normalizedUpper(value: string | null | undefined) {
@@ -772,12 +798,21 @@ async function fetchAeroApiFeedMetadata(flight: Flight): Promise<AeroApiFeedMeta
       return null;
     }
 
+    // Why: parallel resolution. Both origin and destination may need a
+    // reverse-geocode if they're lat/lon pseudo-codes; running them in
+    // parallel keeps the worst-case enrichment latency one Nominatim
+    // call instead of two.
+    const [origin, destination] = await Promise.all([
+      resolveAirportOrLocationLabel(bestMatch.origin),
+      resolveAirportOrLocationLabel(bestMatch.destination)
+    ]);
+
     const metadata: AeroApiFeedMetadata = {
       aircraftType: null,
       airline: normalizeOperatorDisplayName(bestMatch.operator) ?? flight.airline,
-      destination: normalizeAirportCode(bestMatch.destination),
+      destination,
       flightNumber: getPreferredFlightNumber(bestMatch),
-      origin: normalizeAirportCode(bestMatch.origin),
+      origin,
       registration: null
     };
 
@@ -1110,7 +1145,7 @@ export async function fetchAeroApiSelectedFlightDetails(
       // burn an AeroAPI track-fetch quota call here. Saves
       // /flights/{faFlightId}/track per selection — meaningful given
       // AeroAPI's tight rate limit on personal tiers.
-      const [operatorName, track] = await Promise.all([
+      const [operatorName, track, origin, destination] = await Promise.all([
         resolveOperatorName(currentBestMatch.operator_iata || currentBestMatch.operator).catch(
           (error) => {
             console.warn("AeroAPI operator enrichment failed for selected flight", {
@@ -1130,7 +1165,9 @@ export async function fetchAeroApiSelectedFlightDetails(
                 error
               });
               return [];
-            })
+            }),
+        resolveAirportOrLocationLabel(currentBestMatch.origin),
+        resolveAirportOrLocationLabel(currentBestMatch.destination)
       ]);
       const normalizedOperatorName =
         normalizeOperatorDisplayName(operatorName) ??
@@ -1139,10 +1176,10 @@ export async function fetchAeroApiSelectedFlightDetails(
       const details: SelectedFlightDetails = {
         aircraftType: currentBestMatch.aircraft_type ?? null,
         airline: normalizedOperatorName ?? flight.airline,
-        destination: normalizeAirportCode(currentBestMatch.destination),
+        destination,
         faFlightId: currentBestMatch.fa_flight_id ?? null,
         flightNumber: getPreferredFlightNumber(currentBestMatch),
-        origin: normalizeAirportCode(currentBestMatch.origin),
+        origin,
         registration: currentBestMatch.registration ?? null,
         registeredOwner: flight.registeredOwner,
         status: currentBestMatch.status ?? null,
