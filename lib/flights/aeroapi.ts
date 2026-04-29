@@ -16,28 +16,28 @@ const FEED_METADATA_TTL_MS = 1000 * 60 * 60 * 2;
 // Why: misses (AeroAPI returned no current match) are *transient* — the
 // flight may not yet be indexed, or our scoring may have rejected
 // candidates. Caching the null answer for 2h would suppress route
-// enrichment for the rest of the aircraft's time in view. Use a short
-// TTL so we re-attempt soon.
-const FEED_METADATA_NULL_TTL_MS = 1000 * 60 * 5;
+// enrichment for the rest of the aircraft's time in view. 30 min for
+// the feed path matches the click-path's GA_DETAIL_NULL_TTL_MS — an
+// unfiled VFR GA isn't going to suddenly file a plan mid-flight, so
+// re-asking AeroAPI every 5 min was burning daily quota for nothing.
+// (Previously 5 min — caused real rate-limit exhaustion in WeHo airspace
+// where ~30 unfiled GA aircraft are visible at any time.)
+const FEED_METADATA_NULL_TTL_MS = 1000 * 60 * 30;
 const OPERATOR_TTL_MS = 1000 * 60 * 60 * 24 * 7;
-// Why: tuned to stay well under typical AeroAPI rate limits (~10 req/min on
-// personal tiers). 6 warm targets * (60s / 8s spacing) = ~6 calls/min from
-// the warm queue, leaving headroom for selected-flight detail + retries
-// without triggering 429 cooldowns.
+// Why: 6 = batch ceiling on the immediate fetch path. MAX_IMMEDIATE is
+// the actual immediate-batch size, currently 2.
 const MAX_FEED_METADATA_LOOKUPS = 6;
-// Why: bumped 1 → 3. The top-3 strip cards now always get a route lookup
-// in the same poll cycle they appear, instead of waiting ~80 s for the
-// background pump to reach them. Cost: each /api/flights response does up
-// to 3 sequential AeroAPI fetches (~500 ms each) when there are uncached
-// targets, adding ~1-2 s to that request. Acceptable at our 4 s polling
-// interval and dominated by AeroAPI latency, not by quota.
-const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 3;
+// Why: 1 → 3 was too aggressive for personal-tier daily quotas with the
+// volume of GA in WeHo airspace. Pulled back to 2 — top-2 strip cards
+// still get an immediate fetch on appearance, but per-poll burn is
+// 33% lower than at 3.
+const MAX_IMMEDIATE_FEED_METADATA_LOOKUPS = 2;
 const FEED_METADATA_WARM_TARGET = 10;
-// Why: dropped 8000 → 3000. The drain pump now processes one queued
-// warm every 3 s instead of every 8 s, so top-10 warm completes in
-// ~21 s instead of ~80 s. The 45 s rate-limit cooldown still backs us
-// off if AeroAPI starts 429-ing.
-const FEED_METADATA_REQUEST_SPACING_MS = 1000 * 3;
+// Why: 3000 → 5000. Drain pacing is back to a comfortable rate
+// (12 calls/min from the queue worst case vs 20). Combined with 30 min
+// null caching for misses, the steady-state cost should keep us safely
+// under the daily quota even with both commercial and GA in the warm pool.
+const FEED_METADATA_REQUEST_SPACING_MS = 1000 * 5;
 const FEED_METADATA_RATE_LIMIT_COOLDOWN_MS = 1000 * 45;
 const DETAIL_RATE_LIMIT_COOLDOWN_MS = 1000 * 30;
 const RATE_LIMIT_NULL_TTL_MS = 1000 * 30;
