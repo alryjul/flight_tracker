@@ -17,6 +17,9 @@ const MAX_RADIUS_MILES = 250;
 const FRESH_CACHE_HEADER = "private, max-age=2, stale-while-revalidate=30";
 const STALE_CACHE_HEADER = "private, max-age=0, stale-while-revalidate=30";
 const ERROR_CACHE_HEADER = "no-store";
+// Why: feed cache is keyed on caller-supplied lat/lon/radius. A public
+// deployment would otherwise be memory-pinnable by varying the request.
+const FEED_CACHE_MAX_ENTRIES = 64;
 
 type CachedFeed = {
   fetchedAt: number;
@@ -25,6 +28,16 @@ type CachedFeed = {
 
 const feedCache = new Map<string, CachedFeed>();
 let aeroApiDiscoveryCooldownUntil = 0;
+
+function setCachedFeed(key: string, value: CachedFeed) {
+  if (!feedCache.has(key) && feedCache.size >= FEED_CACHE_MAX_ENTRIES) {
+    const oldestKey = feedCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      feedCache.delete(oldestKey);
+    }
+  }
+  feedCache.set(key, value);
+}
 
 function getDiscoveryProviderPreference() {
   const provider = process.env.FLIGHT_DISCOVERY_PROVIDER?.trim().toLowerCase();
@@ -153,7 +166,7 @@ export async function GET(request: NextRequest) {
   if (shouldTryAeroApiDiscovery && canUseAeroApiDiscovery) {
     try {
       const flights = await fetchAeroApiDiscoveryFlights(area);
-      feedCache.set(getAreaCacheKey(area), {
+      setCachedFeed(getAreaCacheKey(area), {
         fetchedAt: Date.now(),
         flights
       });
@@ -215,7 +228,7 @@ export async function GET(request: NextRequest) {
     const flights = await fetchOpenSkyFlights(area, {
       warmAeroApiFeed: warmFeedMetadata
     });
-    feedCache.set(getAreaCacheKey(area), {
+    setCachedFeed(getAreaCacheKey(area), {
       fetchedAt: Date.now(),
       flights
     });

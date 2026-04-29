@@ -6,6 +6,9 @@ type OpenSkyTrackResponse = {
 };
 
 const OPEN_SKY_TRACK_TTL_MS = 1000 * 60 * 2;
+// Why: caller-controlled key (icao24). Bound the cache so a public
+// deployment can't be memory-pinned by varying ids.
+const OPEN_SKY_TRACK_CACHE_MAX_ENTRIES = 500;
 
 type CacheEntry = {
   expiresAt: number;
@@ -27,10 +30,19 @@ function getCachedTrack(icao24: string) {
     return undefined;
   }
 
+  // LRU touch.
+  trackCache.delete(icao24);
+  trackCache.set(icao24, cached);
   return cached.value;
 }
 
 function setCachedTrack(icao24: string, value: SelectedFlightTrackPoint[]) {
+  if (!trackCache.has(icao24) && trackCache.size >= OPEN_SKY_TRACK_CACHE_MAX_ENTRIES) {
+    const oldestKey = trackCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      trackCache.delete(oldestKey);
+    }
+  }
   trackCache.set(icao24, {
     expiresAt: Date.now() + OPEN_SKY_TRACK_TTL_MS,
     value

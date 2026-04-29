@@ -13,6 +13,12 @@ const GA_DETAIL_NULL_TTL_MS = 1000 * 60 * 30;
 // pure waste. Bump to 2h so a flight stays cached through its whole
 // time in the area; LRU caps still bound total memory.
 const FEED_METADATA_TTL_MS = 1000 * 60 * 60 * 2;
+// Why: misses (AeroAPI returned no current match) are *transient* — the
+// flight may not yet be indexed, or our scoring may have rejected
+// candidates. Caching the null answer for 2h would suppress route
+// enrichment for the rest of the aircraft's time in view. Use a short
+// TTL so we re-attempt soon.
+const FEED_METADATA_NULL_TTL_MS = 1000 * 60 * 5;
 const OPERATOR_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 // Why: tuned to stay well under typical AeroAPI rate limits (~10 req/min on
 // personal tiers). 6 warm targets * (60s / 8s spacing) = ~6 calls/min from
@@ -719,7 +725,7 @@ async function fetchAeroApiFeedMetadata(flight: Flight): Promise<AeroApiFeedMeta
     const bestMatch = await resolveBestFlightRecord(flight, { requireCurrent: true });
 
     if (!bestMatch) {
-      setCachedValue(feedMetadataCache, cacheKey, null, FEED_METADATA_TTL_MS, FEED_METADATA_CACHE_MAX_ENTRIES);
+      setCachedValue(feedMetadataCache, cacheKey, null, FEED_METADATA_NULL_TTL_MS, FEED_METADATA_CACHE_MAX_ENTRIES);
       return null;
     }
 

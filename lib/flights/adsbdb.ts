@@ -400,11 +400,16 @@ export function enrichFlightsWithAdsbdbFallback(flights: Flight[]) {
   const combinedCacheKeys = new Set(
     combinedToWarm.map((flight) => getCombinedCacheKey(flight.id, flight.callsign))
   );
+  // Why: the combined endpoint already returns aircraft metadata for the
+  // same icao24. Don't fire a second `/aircraft/{icao}` call against ADSBdb
+  // when the same id is already being fetched via the combined endpoint.
+  const combinedFlightIds = new Set(combinedToWarm.map((flight) => flight.id));
 
   const aircraftToWarm = flights
     .filter(
       (flight) =>
         (flight.aircraftType == null || flight.registration == null || flight.registeredOwner == null) &&
+        !combinedFlightIds.has(flight.id) &&
         getCachedValue(aircraftCache, flight.id) === undefined
     )
     .slice(0, MAX_AIRCRAFT_LOOKUPS_PER_REQUEST);

@@ -1858,6 +1858,10 @@ export function FlightMap() {
 
       for (const flightId of changedFlightIdSet) {
         selectedTrackFreshAtByIdRef.current.delete(flightId);
+        // Why: identity change (new callsign on the same icao24) usually
+        // means a new flight leg. The breadcrumb buffer should NOT carry
+        // positions from the prior leg into the next one.
+        flightBreadcrumbsRef.current.delete(flightId);
       }
     }
 
@@ -2400,11 +2404,21 @@ export function FlightMap() {
         signal: inFlightAbortController.signal
       });
 
-      if (!response.ok) {
+      // Why: 4xx (bad input) — bail. 5xx still carries a JSON body with a
+      // `source` like "opensky-unavailable" and an empty flights array; we
+      // need to process it so the UI marks the feed unavailable instead of
+      // silently rendering the previous positions under the old "opensky"
+      // label.
+      if (response.status >= 400 && response.status < 500) {
         return;
       }
 
-      const data = (await response.json()) as FlightApiResponse;
+      let data: FlightApiResponse;
+      try {
+        data = (await response.json()) as FlightApiResponse;
+      } catch {
+        return;
+      }
 
       if (cancelled || requestId !== requestSequence) {
         return;
