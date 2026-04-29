@@ -7,6 +7,7 @@ import {
 import { fetchAdsbdbSelectedMetadata } from "@/lib/flights/adsbdb";
 import { fetchAdsbLolSelectedFlightTrack } from "@/lib/flights/adsblol";
 import { fetchOpenSkySelectedFlightTrack } from "@/lib/flights/openskyTrack";
+import { inferOriginFromTrack } from "@/lib/flights/trackInference";
 import type { Flight } from "@/lib/flights/types";
 
 export const revalidate = 0;
@@ -185,6 +186,22 @@ export async function GET(request: NextRequest) {
       selectedTrackProvider = "opensky-track";
     }
 
+    // Why: when AeroAPI returns nothing (unfiled VFR — most LA helicopters
+    // and pattern Cessnas) and the selected flight has track data, the
+    // first leg-pruned trace point is usually the actual takeoff position.
+    // Match it to a known LA-area airport, or reverse-geocode to a
+    // neighborhood label. Strip card "From KSMO" or "From Bel Air" beats
+    // a fallback "Route pending" / "VFR".
+    const aeroApiOrigin = trustedAeroApiMetadata?.origin ?? null;
+    const adsbdbOrigin =
+      flight.flightNumber == null ? adsbdbMetadata?.origin ?? null : null;
+    const upstreamOrigin = aeroApiOrigin ?? adsbdbOrigin ?? flight.origin ?? null;
+    const trackInferredOrigin =
+      upstreamOrigin == null && selectedTrack.length > 0
+        ? await inferOriginFromTrack(selectedTrack)
+        : null;
+    const finalOrigin = upstreamOrigin ?? trackInferredOrigin;
+
     const mergedDetails = !hasAnyData
       ? null
       : {
@@ -205,10 +222,7 @@ export async function GET(request: NextRequest) {
             trustedAeroApiMetadata?.flightNumber ??
             (flight.flightNumber == null ? adsbdbMetadata?.flightNumber : null) ??
             flight.flightNumber,
-          origin:
-            trustedAeroApiMetadata?.origin ??
-            (flight.flightNumber == null ? adsbdbMetadata?.origin : null) ??
-            flight.origin,
+          origin: finalOrigin,
           registration:
             trustedAeroApiMetadata?.registration ??
             adsbdbMetadata?.registration ??
