@@ -393,11 +393,6 @@ export function MapCanvas({
     let trailDebugLastLogAtMs = 0;
 
     function renderFrame(frameTime: number) {
-      // Why: read kept to preserve the original RAF timing semantics. The
-      // value is unused but the access keeps the ref hot and serves as a
-      // stable insertion point for future snapshot-driven readouts.
-      const playbackSnapshots = snapshotHistoryRef.current;
-      void playbackSnapshots;
       const animationStates = flightAnimationStatesRef.current;
       const stripHoverElapsedMs =
         hoveredStripStartedAtRef.current == null ? STRIP_HOVER_ECHO_DURATION_MS : frameTime - hoveredStripStartedAtRef.current;
@@ -589,15 +584,8 @@ export function MapCanvas({
           );
         }
 
-        let trailToIconMiles: number | null = null;
         let aheadMiles: number | null = null;
         if (trailTip) {
-          trailToIconMiles = distanceBetweenPointsMiles({
-            fromLatitude: debugIconPosition.latitude,
-            fromLongitude: debugIconPosition.longitude,
-            toLatitude: trailTip.lat,
-            toLongitude: trailTip.lon
-          });
           aheadMiles = aheadOfIconMiles(trailTip.lat, trailTip.lon);
         }
 

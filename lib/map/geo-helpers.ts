@@ -1,12 +1,14 @@
 import type { LngLatBoundsLike } from "maplibre-gl";
 import { APP_CONFIG } from "@/lib/config";
-import { PROXIMITY_RING_MILES } from "@/lib/config/flight-map-constants";
+import {
+  MAX_TRACK_SEGMENT_MILES,
+  PROXIMITY_RING_MILES
+} from "@/lib/config/flight-map-constants";
 import {
   distanceBetweenPointsMiles,
   milesToLatitudeDelta,
   milesToLongitudeDelta
 } from "@/lib/geo";
-import { MAX_TRACK_SEGMENT_MILES } from "@/lib/config/flight-map-constants";
 import type { Flight } from "@/lib/flights/types";
 import type { HomeBaseCenter } from "@/lib/types/flight-map";
 
