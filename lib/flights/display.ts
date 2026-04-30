@@ -137,10 +137,15 @@ export function looksLikeAgencyLabel(value: string | null) {
 // schools) are *operators* even when their pilots fly under tail-number
 // callsigns. Helinet Aviation Services is operating its helicopters,
 // not just owning them. We use this to keep "Operator" instead of
-// degrading to "Owner" for these cases. False positives are bounded —
-// a one-plane "SMITH AVIATION LLC" pass-through reading "Operator" is
-// no worse than reading "Owner"; the inverse (Helinet reading "Owner")
-// was actively wrong.
+// degrading to "Owner" for these cases.
+//
+// Heuristic: aviation-specific tokens only — "AVIATION", "AVLEASE",
+// "AIR LEASE", "JET MANAGEMENT" etc. We deliberately do NOT gate on
+// corporate suffixes like "INC" / "LLC" / "CORP" because plenty of
+// private owners hold their planes via a single-plane holding LLC for
+// tax/liability reasons; flipping every "JOHN SMITH HOLDINGS LLC" to
+// "Operator" would be net worse than the current bounded false
+// positive (a one-plane "SMITH AVIATION LLC" reading "Operator").
 const AVIATION_BUSINESS_KEYWORDS = [
   "AVIATION",
   "AIRWAYS",
@@ -153,6 +158,10 @@ const AVIATION_BUSINESS_KEYWORDS = [
   "FLIGHT ACADEMY",
   "PILOT ACADEMY",
   "AIRCRAFT LEASING",
+  "AIRCRAFT MANAGEMENT",
+  "AIR LEASE", // AIR LEASE CORP, AIR LEASE LLC
+  "AVLEASE", // DYNAMIC AVLEASE INC and similar lessor portmanteaus
+  "JET MANAGEMENT", // EXECUTIVE JET MANAGEMENT, FLEXJET MANAGEMENT
   "AIR MEDICAL"
 ];
 
