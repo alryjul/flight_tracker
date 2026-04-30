@@ -277,7 +277,7 @@ function HeroPanel({
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <p className={LABEL_CLASS}>{label}</p>
-      <div className="flex h-10 items-center justify-center overflow-hidden rounded-md bg-background px-1.5 text-foreground shadow-inner ring-1 ring-border/30">
+      <div className="flex h-10 items-center justify-start overflow-hidden rounded-md bg-background px-1.5 text-foreground shadow-inner ring-1 ring-border/30">
         {fallback ? (
           // Why: long readable names (LAPD Hooper Heliport, Cedars-
           // Sinai Medical Center) don't fit in a 4-cell split-flap —
