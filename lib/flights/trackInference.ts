@@ -1,6 +1,5 @@
 import type { SelectedFlightTrackPoint } from "@/lib/flights/aeroapi";
 import { LA_AREA_AIRPORTS } from "@/lib/flights/laAirports";
-import { reverseGeocodeLocationLabel } from "@/lib/flights/reverseGeocode";
 import { distanceBetweenPointsMiles } from "@/lib/geo";
 
 // Why: a track-derived takeoff point should be (a) inside the trace as
@@ -40,7 +39,7 @@ function looksLikeTakeoff(point: SelectedFlightTrackPoint): boolean {
 }
 
 function findNearestAirport(latitude: number, longitude: number) {
-  let bestMatch: { icao: string; distanceMiles: number } | null = null;
+  let bestMatch: { iata: string; distanceMiles: number } | null = null;
   for (const airport of LA_AREA_AIRPORTS) {
     const distanceMiles = distanceBetweenPointsMiles({
       fromLatitude: latitude,
@@ -52,7 +51,7 @@ function findNearestAirport(latitude: number, longitude: number) {
       distanceMiles <= AIRPORT_MATCH_RADIUS_MILES &&
       (bestMatch == null || distanceMiles < bestMatch.distanceMiles)
     ) {
-      bestMatch = { icao: airport.icao, distanceMiles };
+      bestMatch = { iata: airport.iata, distanceMiles };
     }
   }
   return bestMatch;
@@ -60,23 +59,35 @@ function findNearestAirport(latitude: number, longitude: number) {
 
 // Why: when AeroAPI didn't have an origin (unfiled VFR), the start of
 // the leg-pruned adsb.lol trace usually IS the takeoff position.
-// Match it to a known airport first; if not in our small LA-area DB,
-// reverse-geocode for a neighborhood label.
+// Match it to a known airport in LA_AREA_AIRPORTS — if found, return
+// the IATA code (matching AeroAPI's display shape) so the route reads
+// consistently regardless of which path filled it in.
+//
+// We deliberately do NOT reverse-geocode the lat/lon when no airport
+// matches. Reverse-geocoding produced city/neighborhood labels
+// ("Redding", "Fletcher Hills") for fixed-wing flights from airports
+// outside our LA-focused DB, which AeroAPI would later supersede with
+// a proper IATA code ("RDD", "SEE") — producing a jarring flicker
+// like "Redding → LAX" suddenly becoming "RDD → LAX" mid-session.
+// Returning null here keeps the route as "Route pending" until
+// AeroAPI catches up, which is more honest about what we know.
+//
+// (Helipad / non-airport AeroAPI origins still get reverse-geocoded
+// downstream — AeroAPI emits "L lat lon" pseudo-codes that the
+// AeroAPI normalization path resolves separately to "Cedars-Sinai"
+// etc., independent of this function.)
 //
 // Returns null when:
 //   • trace is empty
 //   • the first point doesn't look like takeoff (mid-flight data start)
-//   • no airport match AND reverse-geocode also fails
-export async function inferOriginFromTrack(
+//   • takeoff position doesn't match any airport in our DB
+export function inferOriginFromTrack(
   trace: SelectedFlightTrackPoint[]
-): Promise<string | null> {
+): string | null {
   const first = trace[0];
   if (!first) return null;
   if (!looksLikeTakeoff(first)) return null;
 
   const airport = findNearestAirport(first.latitude, first.longitude);
-  if (airport) {
-    return airport.icao;
-  }
-  return reverseGeocodeLocationLabel(first.latitude, first.longitude);
+  return airport?.iata ?? null;
 }
