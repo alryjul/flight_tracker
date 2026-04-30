@@ -12,20 +12,10 @@ import {
   getVisibilityScore,
   hasCommercialFlightIdentity
 } from "@/lib/flights/scoring";
-import { isOperatingVfr } from "@/lib/flights/squawk";
 import type { AeroApiFeedMetadata } from "@/lib/flights/aeroapi";
-import {
-  getAircraftTypeFamily,
-  getCompactRouteLabel,
-  getPrimaryIdentifier,
-  isFlightVfrForLabel,
-  looksLikeAgencyLabel,
-  looksLikeGeneralAviationFlight,
-  looksLikeManufacturerName
-} from "@/lib/flights/display";
+import { getPrimaryIdentifier } from "@/lib/flights/display";
 import { getFlightMetricHistory, getMetricTrend } from "@/lib/flights/metrics";
 import {
-  getFlightPositionSnapshotKey,
   getFlightProviderTimestampSec,
   getIdentityScopedValue,
   getLiveFlightIdentityKey
@@ -44,31 +34,16 @@ import {
   shouldRetrySelectedFlightEnrichment,
   stabilizeFlightsForJitter
 } from "@/lib/flights/merging";
-import {
-  computeSpringProviderTimestampSec,
-  updateFlightAnimationStates,
-  updateProviderDeltaEma
-} from "@/lib/map/animation";
+import { updateFlightAnimationStates } from "@/lib/map/animation";
 import {
   buildHomeBaseFeatures,
   buildOpeningBounds,
-  buildRingCoordinates,
-  dedupeCoordinates,
   formatDistanceMiles,
-  getDistanceFromHomeBaseMiles,
-  isValidTrackCoordinate,
-  sanitizeCoordinateSequence
+  getDistanceFromHomeBaseMiles
 } from "@/lib/map/geo-helpers";
 import {
   areSelectedFlightDetailsEquivalent,
-  areTrackPointsEquivalent,
-  getBreadcrumbPoints,
-  getFirstTrackTimestampMs,
-  getLastTrackTimestampMs,
-  hashTrackSegments,
-  mergeSameFlightTrackHistory,
-  mergeSelectedFlightDetailPayload,
-  resolveSelectedTrackRefresh
+  mergeSelectedFlightDetailPayload
 } from "@/lib/map/trails";
 import {
   Sidebar,
@@ -86,7 +61,6 @@ import { SelectedFlightCard } from "@/components/flight-tracker/SelectedFlightCa
 import { SourceStatusFooter } from "@/components/flight-tracker/SourceStatusFooter";
 
 import type {
-  BreadcrumbPoint,
   FlightAnimationState,
   FlightApiResponse,
   FlightBreadcrumbBuffer,
@@ -95,38 +69,18 @@ import type {
   HoveredFlightState,
   IdentityScopedValue,
   RememberedFlightMetadata,
-  SelectedFlightDetailsResponse,
-  SelectedTrackPoint,
-  TrendDirection
+  SelectedFlightDetailsResponse
 } from "@/lib/types/flight-map";
 import {
   AIRSPEED_TREND_THRESHOLD_KNOTS,
   ALTITUDE_TREND_THRESHOLD_FEET,
-  BOOTSTRAP_MAX_EXTRAPOLATION_SEC,
-  BREADCRUMB_LEAD_TOLERANCE_MILES,
   BREADCRUMB_LEG_BREAK_GAP_MS,
-  DEADBAND_FRACTION_OF_EXPECTED_MOVE,
   FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS,
   FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS,
   HIDDEN_TAB_REFRESH_MS,
   HOME_BASE_STORAGE_KEY,
-  MAX_BREADCRUMB_OVERLAP_MILES,
-  MAX_POSITION_JITTER_DEADBAND_MILES,
-  MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES,
-  MAX_TRACK_SEGMENT_MILES,
-  MAX_TRACK_TO_AIRCRAFT_MILES,
-  METRIC_TREND_LOOKBACK_MS,
-  MIN_METRIC_TREND_POINTS,
-  MIN_POSITION_CHANGE_MILES,
-  PROVIDER_DELTA_EMA_DECAY,
-  PROXIMITY_RING_MILES,
   SELECTED_ENRICHMENT_RETRY_DELAYS_MS,
-  SELECTED_TRACK_REFRESH_GRACE_MS,
   SNAPSHOT_HISTORY_RETENTION_MS,
-  SPRING_TAU_SEC,
-  STRIP_HOVER_ECHO_BASE_RADIUS,
-  STRIP_HOVER_ECHO_DURATION_MS,
-  STRIP_HOVER_ECHO_GROWTH,
   STRIP_RANK_CUE_MS,
   STRIP_REORDER_INTERVAL_MS,
   STRIP_REORDER_RANK_THRESHOLD,
@@ -1188,14 +1142,18 @@ export function FlightMap() {
       ? null
       : displayFlights.find((flight) => flight.id === hoveredFlight.flightId) ?? null;
 
-  function openAreaFlyout() {
-    setAreaError(null);
-    setAreaDraft({
-      latitude: homeBase.latitude.toFixed(4),
-      longitude: homeBase.longitude.toFixed(4),
-      radiusMiles: String(radiusMiles)
-    });
-    setAreaFlyoutOpen((open) => !open);
+  function handleAreaPopoverOpenChange(open: boolean) {
+    if (open) {
+      // Reset draft to the current applied area so reopening shows fresh values
+      // rather than the stale, half-edited draft from a previous session.
+      setAreaError(null);
+      setAreaDraft({
+        latitude: homeBase.latitude.toFixed(4),
+        longitude: homeBase.longitude.toFixed(4),
+        radiusMiles: String(radiusMiles)
+      });
+    }
+    setAreaFlyoutOpen(open);
   }
 
   function applyAreaDraft() {
@@ -1372,7 +1330,7 @@ export function FlightMap() {
         <SidebarFooter className="gap-2 px-3 py-2">
           <AreaConfigPopover
             open={areaFlyoutOpen}
-            onOpenChange={setAreaFlyoutOpen}
+            onOpenChange={handleAreaPopoverOpenChange}
             radiusMiles={radiusMiles}
             areaDraft={areaDraft}
             areaError={areaError}
