@@ -48,7 +48,12 @@ function TooltipContent({
         {...props}
       >
         {children}
-        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground" />
+        {/* Why: arrow removed for visual consistency. Radix auto-
+            repositions the arrow when collision detection shifts the
+            tooltip, which made arrows appear in inconsistent locations
+            across the card (left for the title tooltip, repositioned
+            for the top-right type badge). Plain rounded-rectangle
+            tooltips read uniform regardless of shift. */}
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )
