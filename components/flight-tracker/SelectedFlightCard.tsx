@@ -50,15 +50,27 @@ function SelectedFlightCardImpl({
 }: SelectedFlightCardProps) {
   return (
     <Card className="mx-1 mt-2 mb-2 shrink-0 gap-3 py-3">
-      <CardHeader className="gap-1 px-3">
-        <CardDescription className="text-[10px] uppercase tracking-wider">
-          {getIdentifierLabel(flight)}
-        </CardDescription>
+      <CardHeader className="px-3">
+        {/* Why: pin the badges to the top-right corner of the header
+            instead of vertically centering them next to the big title.
+            With items-start the badges align with the small "FLIGHT" /
+            "REGISTRATION" dt label on the left, leaving the title row
+            visually clean. */}
         <div className="flex items-start justify-between gap-2">
-          <CardTitle className="text-lg leading-tight tabular-nums">
-            {getPrimaryIdentifier(flight)}
-          </CardTitle>
-          <div className="flex flex-wrap justify-end gap-1">
+          <div className="flex min-w-0 flex-col gap-1">
+            <CardDescription className="text-[10px] uppercase tracking-wider">
+              {getIdentifierLabel(flight)}
+            </CardDescription>
+            <CardTitle className="text-lg leading-tight tabular-nums">
+              {getPrimaryIdentifier(flight)}
+            </CardTitle>
+            {getSecondaryIdentifier(flight) ? (
+              <p className="text-xs text-muted-foreground">
+                {getSecondaryIdentifier(flight)}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-1">
             <Badge variant="secondary" className="text-[10px]">
               {flight.aircraftType ?? "Unknown type"}
             </Badge>
@@ -69,11 +81,6 @@ function SelectedFlightCardImpl({
             ) : null}
           </div>
         </div>
-        {getSecondaryIdentifier(flight) ? (
-          <p className="text-xs text-muted-foreground">
-            {getSecondaryIdentifier(flight)}
-          </p>
-        ) : null}
       </CardHeader>
       <CardContent className="px-3">
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
