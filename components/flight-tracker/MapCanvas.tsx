@@ -83,6 +83,12 @@ function getLabelLayerCategory(
   return null;
 }
 
+// Why: layer IDs of our custom home-base / focus-indicator layers,
+// added in setupCustomLayers. Toggled together by the homeBaseIndicator
+// switch — both the center point and the concentric radius rings hide
+// or show as a unit (you'd never want one without the other).
+const HOME_BASE_LAYER_IDS = ["home-base-point", "home-rings"] as const;
+
 // Why: walk every layer in the current basemap style and toggle its
 // visibility based on the user's category preferences. Called on
 // initial map load, after every setStyle (theme switch wipes layer
@@ -100,6 +106,16 @@ function applyMapLabelVisibility(
     // setLayoutProperty no-ops if the value is unchanged, so safe to
     // call eagerly without diffing.
     map.setLayoutProperty(layer.id, "visibility", target);
+  }
+  // Custom home-base / focus-indicator layers are ours, not the
+  // basemap's — apply visibility to them by ID directly. They're
+  // re-added on every setStyle (theme switch), so this needs to run
+  // post-style-load like the label visibility above.
+  const homeBaseTarget = visibility.homeBaseIndicator ? "visible" : "none";
+  for (const layerId of HOME_BASE_LAYER_IDS) {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, "visibility", homeBaseTarget);
+    }
   }
 }
 
