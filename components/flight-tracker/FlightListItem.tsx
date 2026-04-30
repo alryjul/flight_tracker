@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   getOperatorLabel,
@@ -14,13 +15,18 @@ type FlightListItemProps = {
   isSelected: boolean;
   isStripHovered: boolean;
   rankChange: number | undefined;
-  onSelect: () => void;
-  onHoverStart: () => void;
-  onHoverEnd: () => void;
-  buttonRef: (node: HTMLButtonElement | null) => void;
+  // Why: parent callbacks take a flight id and remain stable across renders.
+  // The child binds them to its own flight.id via useCallback, so the
+  // <button>'s onClick / onMouseEnter / onMouseLeave / ref props get stable
+  // handler identity per-instance — the React.memo wrapper below can then
+  // skip render when nothing about this flight has actually changed.
+  onSelect: (id: string) => void;
+  onHoverStart: (id: string) => void;
+  onHoverEnd: (id: string) => void;
+  registerRef: (id: string, node: HTMLButtonElement | null) => void;
 };
 
-export function FlightListItem({
+function FlightListItemImpl({
   flight,
   isSelected,
   isStripHovered,
@@ -28,8 +34,22 @@ export function FlightListItem({
   onSelect,
   onHoverStart,
   onHoverEnd,
-  buttonRef
+  registerRef
 }: FlightListItemProps) {
+  const handleSelect = useCallback(() => onSelect(flight.id), [onSelect, flight.id]);
+  const handleHoverStart = useCallback(
+    () => onHoverStart(flight.id),
+    [onHoverStart, flight.id]
+  );
+  const handleHoverEnd = useCallback(
+    () => onHoverEnd(flight.id),
+    [onHoverEnd, flight.id]
+  );
+  const handleRef = useCallback(
+    (node: HTMLButtonElement | null) => registerRef(flight.id, node),
+    [registerRef, flight.id]
+  );
+
   return (
     <button
       className={cn(
@@ -39,12 +59,12 @@ export function FlightListItem({
           "border-sidebar-primary bg-sidebar-accent text-sidebar-accent-foreground",
         isStripHovered && !isSelected && "border-sidebar-primary/40"
       )}
-      onBlur={onHoverEnd}
-      onClick={onSelect}
-      onFocus={onHoverStart}
-      onMouseEnter={onHoverStart}
-      onMouseLeave={onHoverEnd}
-      ref={buttonRef}
+      onBlur={handleHoverEnd}
+      onClick={handleSelect}
+      onFocus={handleHoverStart}
+      onMouseEnter={handleHoverStart}
+      onMouseLeave={handleHoverEnd}
+      ref={handleRef}
       type="button"
     >
       <div className="flex items-center justify-between gap-2">
@@ -97,3 +117,37 @@ export function FlightListItem({
     </button>
   );
 }
+
+// Why: every poll the orchestrator gets a fresh flights array (and possibly
+// fresh per-flight objects from the metadata-merge pipeline), so React.memo's
+// default shallow compare on `flight` would always fail and re-render every
+// item every poll — exactly what we're trying to avoid. Compare only the
+// fields the JSX actually reads. Adding new display fields to the JSX means
+// adding them here too.
+export const FlightListItem = memo(FlightListItemImpl, (prev, next) => {
+  if (
+    prev.isSelected !== next.isSelected ||
+    prev.isStripHovered !== next.isStripHovered ||
+    prev.rankChange !== next.rankChange ||
+    prev.onSelect !== next.onSelect ||
+    prev.onHoverStart !== next.onHoverStart ||
+    prev.onHoverEnd !== next.onHoverEnd ||
+    prev.registerRef !== next.registerRef
+  ) {
+    return false;
+  }
+  const a = prev.flight;
+  const b = next.flight;
+  return (
+    a.id === b.id &&
+    a.flightNumber === b.flightNumber &&
+    a.registration === b.registration &&
+    a.callsign === b.callsign &&
+    a.aircraftType === b.aircraftType &&
+    a.airline === b.airline &&
+    a.registeredOwner === b.registeredOwner &&
+    a.origin === b.origin &&
+    a.destination === b.destination &&
+    a.squawk === b.squawk
+  );
+});

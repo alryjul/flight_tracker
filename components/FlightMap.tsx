@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { APP_CONFIG } from "@/lib/config";
 import {
@@ -1223,7 +1223,9 @@ export function FlightMap() {
     );
   }
 
-  function handleStripHoverStart(flightId: string) {
+  // Why: stable callback identity so memoized FlightListItem children don't
+  // re-render every poll. The function only touches refs + stable setters.
+  const handleStripHoverStart = useCallback((flightId: string) => {
     if (hoveredStripFlightIdRef.current === flightId) {
       return;
     }
@@ -1231,9 +1233,10 @@ export function FlightMap() {
     hoveredStripFlightIdRef.current = flightId;
     hoveredStripStartedAtRef.current = performance.now();
     setHoveredStripFlightId(flightId);
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  function handleStripHoverEnd(flightId: string) {
+  const handleStripHoverEnd = useCallback((flightId: string) => {
     if (hoveredStripFlightIdRef.current !== flightId) {
       return;
     }
@@ -1241,7 +1244,17 @@ export function FlightMap() {
     hoveredStripFlightIdRef.current = null;
     hoveredStripStartedAtRef.current = null;
     setHoveredStripFlightId((currentId) => (currentId === flightId ? null : currentId));
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const registerStripRef = useCallback((id: string, node: HTMLButtonElement | null) => {
+    if (node) {
+      stripElementRefs.current.set(id, node);
+    } else {
+      stripElementRefs.current.delete(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <>
@@ -1320,10 +1333,7 @@ export function FlightMap() {
             onSelectFlight={setSelectedFlightId}
             onHoverStart={handleStripHoverStart}
             onHoverEnd={handleStripHoverEnd}
-            registerStripRef={(id, node) => {
-              if (node) stripElementRefs.current.set(id, node);
-              else stripElementRefs.current.delete(id);
-            }}
+            registerStripRef={registerStripRef}
           />
         </SidebarContent>
 

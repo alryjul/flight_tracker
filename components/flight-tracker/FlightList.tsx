@@ -32,6 +32,12 @@ export function FlightList({
           const isSelected = flight.id === selectedFlightId;
           const isStripHovered = flight.id === hoveredStripFlightId;
           const rankChange = stripRankChanges[flight.id];
+          // Why: pass parent callbacks directly + flight as the single object.
+          // FlightListItem binds its own per-flight callbacks via useCallback so
+          // the memoized child sees stable handler identity across renders.
+          // Inline `() => onHoverStart(flight.id)` here would create new
+          // function objects every render (50 items × 4 callbacks each),
+          // defeating React.memo's prop comparison.
           return (
             <FlightListItem
               key={flight.id}
@@ -39,10 +45,10 @@ export function FlightList({
               isSelected={isSelected}
               isStripHovered={isStripHovered}
               rankChange={rankChange}
-              onSelect={() => onSelectFlight(flight.id)}
-              onHoverStart={() => onHoverStart(flight.id)}
-              onHoverEnd={() => onHoverEnd(flight.id)}
-              buttonRef={(node) => registerStripRef(flight.id, node)}
+              onSelect={onSelectFlight}
+              onHoverStart={onHoverStart}
+              onHoverEnd={onHoverEnd}
+              registerRef={registerStripRef}
             />
           );
         })}
