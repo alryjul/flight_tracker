@@ -1,7 +1,12 @@
 "use client";
 
+import { Helicopter, Plane } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
+import {
+  getAircraftTypeBadgeLabel,
+  isHelicopterType
+} from "@/lib/flights/aircraftTypes";
 import {
   getOperatorLabel,
   getOperatorLabelTitle,
@@ -85,12 +90,18 @@ function FlightListItemImpl({
               {rankChange > 0 ? "↑" : "↓"}
             </span>
           ) : null}
-          <Badge
-            variant="outline"
-            className="px-1.5 py-0 text-[9px] font-normal tabular-nums"
-          >
-            {flight.aircraftType ?? "UNK"}
-          </Badge>
+          {(() => {
+            const Icon = isHelicopterType(flight.aircraftType) ? Helicopter : Plane;
+            return (
+              <Badge
+                variant="outline"
+                className="px-1.5 py-0 text-[9px] font-normal tabular-nums"
+              >
+                <Icon aria-hidden="true" />
+                {getAircraftTypeBadgeLabel(flight.aircraftType)}
+              </Badge>
+            );
+          })()}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-2 text-[11px]">

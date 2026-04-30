@@ -1,5 +1,6 @@
 "use client";
 
+import { Helicopter, Plane } from "lucide-react";
 import { memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -30,6 +31,11 @@ import {
   normalizeRegisteredOwnerLabel,
   type FlightStatusSeverity
 } from "@/lib/flights/display";
+import {
+  getAircraftTypeBadgeLabel,
+  isHelicopterType,
+  resolveAircraftType
+} from "@/lib/flights/aircraftTypes";
 import type { ComponentProps } from "react";
 import type { Flight } from "@/lib/flights/types";
 import {
@@ -144,6 +150,58 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
   );
 }
 
+// Why: aircraft-type badge needs the readable short name, an icon
+// (Plane / Helicopter), and a hover tooltip with the raw ICAO + full
+// manufacturer-prefixed name when we have a mapping. For unmapped
+// types we fall back to the raw ICAO with a Plane icon (most unmapped
+// types are GA / experimental fixed-wing) and skip the tooltip — the
+// displayed text already IS the most precise info we have.
+function AircraftTypeBadge({
+  aircraftType
+}: {
+  aircraftType: string | null;
+}) {
+  const resolved = resolveAircraftType(aircraftType);
+  const label = getAircraftTypeBadgeLabel(aircraftType);
+  const Icon = isHelicopterType(aircraftType) ? Helicopter : Plane;
+
+  // No mapping → raw ICAO already shown, no tooltip content to add.
+  if (!resolved) {
+    return (
+      <Badge variant="secondary" className="text-[10px]">
+        <Icon aria-hidden="true" />
+        {label}
+      </Badge>
+    );
+  }
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="secondary"
+            className="cursor-help text-[10px]"
+            tabIndex={0}
+          >
+            <Icon aria-hidden="true" />
+            {label}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="end" className="flex flex-col gap-0.5">
+          {aircraftType ? (
+            <span className="tabular-nums">
+              <span className="text-background/70">ICAO </span>
+              {aircraftType.trim().toUpperCase()}
+            </span>
+          ) : null}
+          <span>{resolved.full}</span>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function SelectedFlightCardImpl({
   flight,
   details,
@@ -190,9 +248,7 @@ function SelectedFlightCardImpl({
             <FlightTitleWithRadioTooltip flight={flight} />
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-1">
-            <Badge variant="secondary" className="text-[10px]">
-              {flight.aircraftType ?? "Unknown type"}
-            </Badge>
+            <AircraftTypeBadge aircraftType={flight.aircraftType} />
             {meaningfulStatus && statusBadgeStyle ? (
               <Badge
                 variant={statusBadgeStyle.variant}
