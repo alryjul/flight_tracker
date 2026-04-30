@@ -159,7 +159,17 @@ export function looksLikeAgencyLabel(value: string | null) {
     return false;
   }
 
-  return /(POLICE|SHERIFF|FIRE|PATROL|AIR SUPPORT|DEPARTMENT)/i.test(value);
+  // Why: keyword set that triggers the "Agency" dt label instead of
+  // "Operator" / "Airline". Covers civilian public-safety (police,
+  // sheriff, fire, highway patrol), military service branches (Army,
+  // Navy, Marines, Air Force, Coast Guard, National Guard), and a few
+  // federal civilian agencies that operate aircraft (Forest Service
+  // for fire-suppression air tankers, Park Service for backcountry
+  // ops). Extend as new agencies show up — e.g., "United States Army"
+  // currently fires on the ARMY token.
+  return /(POLICE|SHERIFF|FIRE|PATROL|AIR SUPPORT|DEPARTMENT|ARMY|NAVY|MARINE|AIR FORCE|COAST GUARD|NATIONAL GUARD|FOREST SERVICE|PARK SERVICE)/i.test(
+    value
+  );
 }
 
 // Why: a transient null/missing squawk between confirmed VFR squawks
