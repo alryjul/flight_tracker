@@ -57,7 +57,7 @@ export function AreaConfigPopover({
         <div className="grid gap-3">
           <div className="grid grid-cols-2 gap-2">
             <div className="grid gap-1">
-              <Label htmlFor="area-lat" className="text-[10px] uppercase tracking-wider">
+              <Label htmlFor="area-lat" className="text-[10px] uppercase tracking-wider font-mono">
                 Latitude
               </Label>
               <Input
@@ -74,7 +74,7 @@ export function AreaConfigPopover({
               />
             </div>
             <div className="grid gap-1">
-              <Label htmlFor="area-lon" className="text-[10px] uppercase tracking-wider">
+              <Label htmlFor="area-lon" className="text-[10px] uppercase tracking-wider font-mono">
                 Longitude
               </Label>
               <Input
@@ -92,7 +92,7 @@ export function AreaConfigPopover({
             </div>
           </div>
           <div className="grid gap-1">
-            <Label htmlFor="area-rad" className="text-[10px] uppercase tracking-wider">
+            <Label htmlFor="area-rad" className="text-[10px] uppercase tracking-wider font-mono">
               Radius (miles)
             </Label>
             <Input

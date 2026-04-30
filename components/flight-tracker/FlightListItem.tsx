@@ -110,7 +110,7 @@ function FlightListItemImpl({
               so a flight that reads "Airline: Southwest Airlines" in the main
               card doesn't read "Operator: Southwest Airlines" in its strip row.
               CALSTAR & friends correctly degrade to "Operator" in both places. */}
-          <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
+          <small className="text-[9px] uppercase tracking-wider text-muted-foreground font-mono">
             {getOperatorLabelTitle(flight)}
           </small>
           <strong className="truncate font-medium">
@@ -132,7 +132,7 @@ function FlightListItemImpl({
             const routeCell = getRouteCell(flight);
             return (
               <>
-                <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                <small className="text-[9px] uppercase tracking-wider text-muted-foreground font-mono">
                   {routeCell.label}
                 </small>
                 <strong className="truncate font-medium tabular-nums">

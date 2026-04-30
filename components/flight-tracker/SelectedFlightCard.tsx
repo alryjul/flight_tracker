@@ -65,9 +65,12 @@ type SelectedFlightCardProps = {
 // styling. Pinning leading-tight (vs. the cascaded text-xs/relaxed
 // 1.625 from Card) gives all labels a 12.5px line-box for 10px text —
 // no extra "leading" space below the label glyphs that would otherwise
-// inflate the visible gap to the value below.
+// inflate the visible gap to the value below. font-mono pulls Geist
+// Mono in via the --font-mono CSS variable, giving the labels a
+// distinct "this is metadata" texture that reads as a different
+// register than the values below.
 const LABEL_CLASS =
-  "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground";
+  "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground font-mono";
 
 // Why: severity-to-visual mapping for the status badge. Lives at the
 // component layer (not display.ts) because it's a styling concern; the
