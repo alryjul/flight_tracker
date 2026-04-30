@@ -11,7 +11,7 @@ import {
   getOperatorLabel,
   getOperatorLabelTitle,
   getPrimaryIdentifier,
-  getStripRouteLabel
+  getRouteCell
 } from "@/lib/flights/display";
 import type { Flight } from "@/lib/flights/types";
 import { cn } from "@/lib/utils";
@@ -122,12 +122,25 @@ function FlightListItemImpl({
           </strong>
         </span>
         <span className="flex min-w-0 flex-col">
-          <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
-            Route
-          </small>
-          <strong className="truncate font-medium tabular-nums">
-            {getStripRouteLabel(flight)}
-          </strong>
+          {/* Why: route cell adapts label + value together — origin-only
+              flights read as "FROM / Hooper" instead of the redundant
+              "ROUTE / From Hooper" we used to show. Two-airport routes
+              still use "ROUTE / X to Y" because the strip's half-width
+              cell isn't tall enough to split into FROM / TO columns
+              like the SelectedFlightCard does. */}
+          {(() => {
+            const routeCell = getRouteCell(flight);
+            return (
+              <>
+                <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                  {routeCell.label}
+                </small>
+                <strong className="truncate font-medium tabular-nums">
+                  {routeCell.value}
+                </strong>
+              </>
+            );
+          })()}
         </span>
       </div>
     </button>

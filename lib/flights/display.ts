@@ -232,6 +232,41 @@ export function getStripRouteLabel(flight: Flight) {
   return getRouteFallbackLabel(flight);
 }
 
+// Why: when a UI surface has only one labeled slot for the route (a
+// strip row's right-hand cell, a list item, etc.), pair the dt label
+// with the value adaptively so the preposition isn't redundant with
+// the label above. Concretely, an origin-only flight previously read
+// as "ROUTE / From Hooper" — the "From" was redundant given the
+// "ROUTE" label. With the cell adapting to "FROM / Hooper", the
+// preposition leaves the value and becomes the label itself.
+//
+// SelectedFlightCard uses its own FlightRouteRow that splits FROM /
+// TO into two columns; this helper is for surfaces that have only a
+// single slot.
+export type FlightRouteCell = {
+  label: string;
+  value: string;
+};
+
+export function getRouteCell(flight: Flight): FlightRouteCell {
+  if (flight.origin && flight.destination) {
+    return {
+      label: "Route",
+      value: `${flight.origin} to ${flight.destination}`
+    };
+  }
+  if (flight.origin) {
+    return { label: "From", value: flight.origin };
+  }
+  if (flight.destination) {
+    return { label: "To", value: flight.destination };
+  }
+  if (flight.flightNumber) {
+    return { label: "Route", value: "Route pending" };
+  }
+  return { label: "Route", value: getRouteFallbackLabel(flight) };
+}
+
 export function getHoverSubtitle(flight: Flight) {
   return (
     getCompactRouteLabel(flight) ??
