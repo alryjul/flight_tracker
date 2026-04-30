@@ -471,6 +471,10 @@ function looksLikeAgencyLabel(value: string | null) {
 // the squawk transitions to a real non-VFR code the latch is broken
 // (the aircraft is genuinely no longer VFR).
 const VFR_LATCH_DURATION_MS = 30_000;
+// Why: cap the latch map. Long-running sessions accumulate entries as
+// aircraft come and go (and identityKey changes on callsign reassign).
+// Without this the map grows unbounded.
+const VFR_LATCH_MAX_ENTRIES = 200;
 const vfrLatchedAtByIdentity = new Map<string, number>();
 
 function getVfrLatchKey(flight: Flight) {
@@ -479,7 +483,17 @@ function getVfrLatchKey(flight: Flight) {
 
 function refreshVfrLatchIfApplicable(flight: Flight) {
   if (isOperatingVfr(flight)) {
-    vfrLatchedAtByIdentity.set(getVfrLatchKey(flight), performance.now());
+    const key = getVfrLatchKey(flight);
+    // delete-then-set bubbles to "most recent" in insertion order so
+    // active aircraft don't LRU-evict.
+    vfrLatchedAtByIdentity.delete(key);
+    if (vfrLatchedAtByIdentity.size >= VFR_LATCH_MAX_ENTRIES) {
+      const oldest = vfrLatchedAtByIdentity.keys().next().value;
+      if (oldest !== undefined) {
+        vfrLatchedAtByIdentity.delete(oldest);
+      }
+    }
+    vfrLatchedAtByIdentity.set(key, performance.now());
   }
 }
 
@@ -1957,6 +1971,12 @@ export function FlightMap() {
   const [feedWarmEnabled, setFeedWarmEnabled] = useState(false);
   const feedWarmEnabledRef = useRef(feedWarmEnabled);
   const pageVisibleRef = useRef(true);
+  // Why: tracks the wall-clock time of the most recent successful poll.
+  // Used to suppress the breadcrumb-wipe false-positive when polling
+  // resumes after a long hidden-tab throttle: a "15-min gap since
+  // lastSeenAt" might just mean "the browser stopped firing setTimeout."
+  // If we just resumed polling, the gap isn't a real landing event.
+  const lastPollAtRef = useRef<number>(Date.now());
   const [feedMetadataById, setFeedMetadataById] = useState<
     Record<string, IdentityScopedValue<AeroApiFeedMetadata>>
   >({});
@@ -2688,6 +2708,16 @@ export function FlightMap() {
         // Append to the persistent per-flight breadcrumb buffer so the
         // selected flight's trail can outlive the 72s snapshot pruning.
         const wallNow = Date.now();
+        // Why: if we haven't polled successfully recently (browser
+        // throttled hidden-tab setTimeout, network outage, etc.), an
+        // apparent "15-min gap since lastSeenAt" might just be polling
+        // silence, not an actual landing. Skip the wipe on the first
+        // poll back from such a gap. 60 s threshold is well above the
+        // 30 s hidden-tab refresh interval and the 4 s visible interval,
+        // so normal cadence never triggers it.
+        const justResumedFromPollSilence =
+          wallNow - lastPollAtRef.current > 60_000;
+        lastPollAtRef.current = wallNow;
         const seenIds = new Set<string>();
         for (const flight of stabilizedFlights) {
           seenIds.add(flight.id);
@@ -2695,10 +2725,14 @@ export function FlightMap() {
           if (!buffer) {
             buffer = { points: [], lastSeenAt: wallNow };
             flightBreadcrumbsRef.current.set(flight.id, buffer);
-          } else if (wallNow - buffer.lastSeenAt > BREADCRUMB_LEG_BREAK_GAP_MS) {
-            // Gap > 15 min — almost certainly a landing → ramp →
-            // takeoff sequence. Wipe the previous leg's breadcrumbs so
-            // we don't paint a connecting line across legs.
+          } else if (
+            !justResumedFromPollSilence &&
+            wallNow - buffer.lastSeenAt > BREADCRUMB_LEG_BREAK_GAP_MS
+          ) {
+            // Gap > 15 min during normal polling — almost certainly a
+            // landing → ramp → takeoff sequence. Wipe the previous
+            // leg's breadcrumbs so we don't paint a connecting line
+            // across legs.
             buffer.points = [];
           }
           buffer.points.push({

@@ -1143,10 +1143,17 @@ export async function fetchAeroApiSelectedFlightDetails(
     return null;
   }
 
-  const inFlightRequest = detailRequests.get(cacheKey);
-
-  if (inFlightRequest) {
-    return inFlightRequest;
+  // Why: when bypassCache is set (manual ?refresh=1), do NOT join an
+  // in-flight non-bypass request — it may be returning HTTP-cached data
+  // from inside its own fetchJson, which defeats the user's refresh
+  // intent. Bypass requests run their own dedicated fetch and don't
+  // register in detailRequests (so they don't cause normal callers to
+  // join a bypass request and skip their own caching either).
+  if (!bypassCache) {
+    const inFlightRequest = detailRequests.get(cacheKey);
+    if (inFlightRequest) {
+      return inFlightRequest;
+    }
   }
 
   const request = (async () => {
@@ -1235,11 +1242,15 @@ export async function fetchAeroApiSelectedFlightDetails(
     }
   })();
 
-  detailRequests.set(cacheKey, request);
+  if (!bypassCache) {
+    detailRequests.set(cacheKey, request);
+  }
 
   try {
     return await request;
   } finally {
-    detailRequests.delete(cacheKey);
+    if (!bypassCache) {
+      detailRequests.delete(cacheKey);
+    }
   }
 }
