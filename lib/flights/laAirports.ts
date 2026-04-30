@@ -187,6 +187,31 @@ export const KNOWN_AIRPORTS: Airport[] = [
   { icao: "KCLT", iata: "CLT", name: "Charlotte Douglas", latitude: 35.214, longitude: -80.9431 },
   { icao: "KMSY", iata: "MSY", name: "Louis Armstrong New Orleans", latitude: 29.9934, longitude: -90.258 },
 
+  // ── Military / federal airfields ──
+  // Why: military bases with no commercial passenger service still
+  // generate ADS-B traffic (training flights, refueling, transport).
+  // Most don't have IATA codes — we use the FAA LID instead, which is
+  // also what AeroAPI tends to surface in its `code` field for these
+  // fields. KSLI in particular was reverse-geocoding to "Los Alamitos"
+  // (the city) instead of resolving to "SLI" — this section closes
+  // those gaps for SoCal Navy/Marine/Army airfields plus the major
+  // western Air Force bases.
+  { icao: "KSLI", iata: "SLI", name: "JFTB Los Alamitos AAF", latitude: 33.79, longitude: -118.0525 },
+  { icao: "KNZY", iata: "NZY", name: "NAS North Island (San Diego)", latitude: 32.6993, longitude: -117.2153 },
+  { icao: "KNKX", iata: "NKX", name: "MCAS Miramar", latitude: 32.8682, longitude: -117.143 },
+  { icao: "KNFG", iata: "NFG", name: "MCAS Camp Pendleton (Munn Field)", latitude: 33.3017, longitude: -117.355 },
+  { icao: "KNTD", iata: "NTD", name: "NAS Point Mugu (Ventura County)", latitude: 34.1203, longitude: -119.1212 },
+  { icao: "KNJK", iata: "NJK", name: "NAF El Centro", latitude: 32.8294, longitude: -115.6717 },
+  { icao: "KNXP", iata: "NXP", name: "MCAGCC Twentynine Palms", latitude: 34.2964, longitude: -116.1622 },
+  { icao: "KNID", iata: "NID", name: "NAWS China Lake", latitude: 35.6853, longitude: -117.6913 },
+  { icao: "KSUU", iata: "SUU", name: "Travis AFB", latitude: 38.2627, longitude: -121.9272 },
+  { icao: "KMCC", iata: "MCC", name: "McClellan Airfield (Sacramento)", latitude: 38.6676, longitude: -121.4007 },
+  { icao: "KBAB", iata: "BAB", name: "Beale AFB", latitude: 39.1361, longitude: -121.4366 },
+  { icao: "KLUF", iata: "LUF", name: "Luke AFB", latitude: 33.535, longitude: -112.3831 },
+  { icao: "KDMA", iata: "DMA", name: "Davis-Monthan AFB", latitude: 32.1665, longitude: -110.8829 },
+  { icao: "KFHU", iata: "FHU", name: "Sierra Vista / Fort Huachuca", latitude: 31.5885, longitude: -110.3443 },
+  { icao: "KNYL", iata: "YUM", name: "MCAS Yuma / Yuma International", latitude: 32.6566, longitude: -114.6061 },
+
   // ── Hawaii ──
   { icao: "PHNL", iata: "HNL", name: "Daniel K. Inouye (Honolulu)", latitude: 21.3187, longitude: -157.9224 },
   { icao: "PHOG", iata: "OGG", name: "Kahului (Maui)", latitude: 20.8986, longitude: -156.4305 },
