@@ -16,6 +16,23 @@ import {
 } from "@/lib/flights/scoring";
 import { isOperatingVfr } from "@/lib/flights/squawk";
 import type { AeroApiFeedMetadata } from "@/lib/flights/aeroapi";
+import { cn } from "@/lib/utils";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarTrigger
+} from "@/components/ui/sidebar";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 type FlightApiResponse = {
   center: {
@@ -3743,67 +3760,309 @@ export function FlightMap() {
   }
 
   return (
-    <section className="tracker-panel">
-      <div className="map-panel">
-        <div className="map-frame" ref={containerRef} />
-        {hoveredFlightDisplay && hoveredFlight ? (
-          <div
-            className="map-hover-card"
-            style={{
-              left: hoveredFlight.left,
-              top: hoveredFlight.top
-            }}
-          >
-            <div className="map-hover-row">
-              <strong>{getPrimaryIdentifier(hoveredFlightDisplay)}</strong>
-              {hoveredFlightDisplay.aircraftType ? (
-                <span
-                  className={`strip-category equipment-tag family-${getAircraftTypeFamily(hoveredFlightDisplay)}`}
-                >
-                  {hoveredFlightDisplay.aircraftType}
-                </span>
-              ) : null}
+    <>
+      {/* Full-viewport map sits behind the floating sidebar.
+          Wrapper is positioned because maplibre forces `position: relative` on the
+          ref'd container, which would otherwise neutralize `fixed inset-0`. */}
+      <div className="fixed inset-0 z-0">
+        <div className="h-full w-full" ref={containerRef} />
+      </div>
+
+      <Sidebar variant="floating" side="left" collapsible="offcanvas">
+        <SidebarHeader className="gap-2 px-3 pt-3 pb-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] uppercase tracking-wider text-sidebar-foreground/60">
+                In view
+              </p>
+              <h2 className="text-base font-semibold tabular-nums leading-tight">
+                {displayFlights.length} flights
+              </h2>
             </div>
-            <span>{getHoverSubtitle(hoveredFlightDisplay)}</span>
+            <ThemeToggle />
           </div>
-        ) : null}
-        <div className="area-flyout">
-          <button className="area-flyout-toggle" onClick={openAreaFlyout} type="button">
-            <span className="map-overlay-label">Area</span>
-            <strong>{radiusMiles} mi</strong>
-          </button>
-          {areaFlyoutOpen ? (
-            <div className="area-flyout-panel">
-              <div className="area-flyout-grid">
-                <label className="area-field">
-                  <span>Latitude</span>
-                  <input
-                    onChange={(event) =>
-                      setAreaDraft((currentDraft) => ({
-                        ...currentDraft,
-                        latitude: event.target.value
-                      }))
-                    }
-                    type="text"
-                    value={areaDraft.latitude}
-                  />
-                </label>
-                <label className="area-field">
-                  <span>Longitude</span>
-                  <input
-                    onChange={(event) =>
-                      setAreaDraft((currentDraft) => ({
-                        ...currentDraft,
-                        longitude: event.target.value
-                      }))
-                    }
-                    type="text"
-                    value={areaDraft.longitude}
-                  />
-                </label>
-                <label className="area-field span-2">
-                  <span>Radius (miles)</span>
-                  <input
+          {nearestFlight ? (
+            <button
+              className="flex items-center justify-between gap-2 rounded-md border border-sidebar-border bg-sidebar-accent/40 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent"
+              onClick={() => setSelectedFlightId(nearestFlight.id)}
+              type="button"
+            >
+              <span className="text-sidebar-foreground/60">Nearest now</span>
+              <strong className="font-medium tabular-nums">
+                {getPrimaryIdentifier(nearestFlight)}
+              </strong>
+              <small className="tabular-nums text-sidebar-foreground/60">
+                {formatDistanceMiles(getDistanceFromHomeBaseMiles(nearestFlight, homeBase))}
+              </small>
+            </button>
+          ) : null}
+        </SidebarHeader>
+
+        <SidebarContent className="gap-0 px-2">
+          {selectedFlightDisplay ? (
+            <Card className="mx-1 mt-2 mb-2 gap-3 py-3">
+              <CardHeader className="gap-1 px-3">
+                <CardDescription className="text-[10px] uppercase tracking-wider">
+                  {getIdentifierLabel(selectedFlightDisplay)}
+                </CardDescription>
+                <div className="flex items-start justify-between gap-2">
+                  <CardTitle className="text-lg leading-tight tabular-nums">
+                    {getPrimaryIdentifier(selectedFlightDisplay)}
+                  </CardTitle>
+                  <div className="flex flex-wrap justify-end gap-1">
+                    <Badge variant="secondary" className="text-[10px]">
+                      {selectedFlightDisplay.aircraftType ?? "Unknown type"}
+                    </Badge>
+                    {activeSelectedFlightDetails?.status ? (
+                      <Badge className="text-[10px]">
+                        {activeSelectedFlightDetails.status}
+                      </Badge>
+                    ) : null}
+                  </div>
+                </div>
+                {getSecondaryIdentifier(selectedFlightDisplay) ? (
+                  <p className="text-xs text-muted-foreground">
+                    {getSecondaryIdentifier(selectedFlightDisplay)}
+                  </p>
+                ) : null}
+              </CardHeader>
+              <CardContent className="px-3">
+                <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                  {getOperatorLabel(selectedFlightDisplay) ? (
+                    <div className="col-span-2 min-w-0">
+                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {getOperatorLabelTitle(selectedFlightDisplay)}
+                      </dt>
+                      <dd className="truncate font-medium">
+                        {getOperatorLabel(selectedFlightDisplay)}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {selectedFlightDisplay.registration &&
+                  getPrimaryIdentifier(selectedFlightDisplay) !== selectedFlightDisplay.registration ? (
+                    <div className="min-w-0">
+                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Registration
+                      </dt>
+                      <dd className="truncate font-medium tabular-nums">
+                        {selectedFlightDisplay.registration}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {getRouteLabel(selectedFlightDisplay) ? (
+                    <div className="col-span-2 min-w-0">
+                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Route
+                      </dt>
+                      <dd className="truncate font-medium tabular-nums">
+                        {getRouteLabel(selectedFlightDisplay)}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner) &&
+                  normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner) !==
+                    getOperatorLabel(selectedFlightDisplay) ? (
+                    <div className="col-span-2 min-w-0">
+                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Owner
+                      </dt>
+                      <dd className="truncate font-medium">
+                        {normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner)}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                <Separator className="my-2" />
+                <dl className="grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Distance
+                    </dt>
+                    <dd className="font-medium tabular-nums">
+                      {formatDistanceMiles(
+                        getDistanceFromHomeBaseMiles(selectedFlightDisplay, homeBase)
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Altitude
+                    </dt>
+                    <dd className="flex items-baseline gap-1 font-medium tabular-nums">
+                      {formatAltitude(
+                        selectedFlightDisplay.altitudeFeet,
+                        activeSelectedFlightDetails?.status
+                      )}
+                      {altitudeTrend ? (
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "text-[10px]",
+                            altitudeTrend === "up" ? "text-emerald-500" : "text-red-500"
+                          )}
+                        >
+                          {altitudeTrend === "up" ? "↑" : "↓"}
+                        </span>
+                      ) : null}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Airspeed
+                    </dt>
+                    <dd className="flex items-baseline gap-1 font-medium tabular-nums">
+                      {formatAirspeed(selectedFlightDisplay.groundspeedKnots)}
+                      {airspeedTrend ? (
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "text-[10px]",
+                            airspeedTrend === "up" ? "text-emerald-500" : "text-red-500"
+                          )}
+                        >
+                          {airspeedTrend === "up" ? "↑" : "↓"}
+                        </span>
+                      ) : null}
+                    </dd>
+                  </div>
+                </dl>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <ScrollArea className="flex-1 px-1">
+            <div className="flex flex-col gap-1 pb-2">
+              {displayFlights.map((flight) => {
+                const isSelected = flight.id === selectedFlightDisplay?.id;
+                const isStripHovered = flight.id === hoveredStripFlightId;
+                const rankChange = stripRankChanges[flight.id];
+                return (
+                  <button
+                    className={cn(
+                      "group flex flex-col gap-1.5 rounded-md border px-2.5 py-2 text-left transition-colors",
+                      "border-sidebar-border bg-sidebar/40 hover:bg-sidebar-accent/60",
+                      isSelected &&
+                        "border-sidebar-primary bg-sidebar-accent text-sidebar-accent-foreground",
+                      isStripHovered && !isSelected && "border-sidebar-primary/40"
+                    )}
+                    key={flight.id}
+                    onBlur={() => handleStripHoverEnd(flight.id)}
+                    onClick={() => setSelectedFlightId(flight.id)}
+                    onFocus={() => handleStripHoverStart(flight.id)}
+                    onMouseEnter={() => handleStripHoverStart(flight.id)}
+                    onMouseLeave={() => handleStripHoverEnd(flight.id)}
+                    ref={(node) => {
+                      if (node) {
+                        stripElementRefs.current.set(flight.id, node);
+                      } else {
+                        stripElementRefs.current.delete(flight.id);
+                      }
+                    }}
+                    type="button"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="truncate text-sm font-semibold tabular-nums">
+                        {getPrimaryIdentifier(flight)}
+                      </strong>
+                      <span className="flex items-center gap-1.5">
+                        {rankChange ? (
+                          <span
+                            aria-label={rankChange > 0 ? "Moved closer" : "Moved farther"}
+                            className={cn(
+                              "text-[10px] font-medium",
+                              rankChange > 0 ? "text-emerald-500" : "text-muted-foreground"
+                            )}
+                            title={rankChange > 0 ? "Moved closer" : "Moved farther"}
+                          >
+                            {rankChange > 0 ? "↑" : "↓"}
+                          </span>
+                        ) : null}
+                        <Badge
+                          variant="outline"
+                          className="px-1.5 py-0 text-[9px] font-normal tabular-nums"
+                        >
+                          {flight.aircraftType ?? "UNK"}
+                        </Badge>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <span className="flex min-w-0 flex-col">
+                        <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                          Operator
+                        </small>
+                        <strong className="truncate font-medium">
+                          {getListSecondaryLeft(flight)}
+                        </strong>
+                      </span>
+                      <span className="flex min-w-0 flex-col">
+                        <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                          Route
+                        </small>
+                        <strong className="truncate font-medium tabular-nums">
+                          {getStripRouteLabel(flight)}
+                        </strong>
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </ScrollArea>
+        </SidebarContent>
+
+        <SidebarFooter className="gap-2 px-3 py-2">
+          <Popover open={areaFlyoutOpen} onOpenChange={setAreaFlyoutOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="w-full justify-between">
+                <span className="text-xs text-muted-foreground">Area</span>
+                <strong className="text-xs tabular-nums">{radiusMiles} mi</strong>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="start" className="w-72">
+              <div className="grid gap-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="grid gap-1">
+                    <Label htmlFor="area-lat" className="text-[10px] uppercase tracking-wider">
+                      Latitude
+                    </Label>
+                    <Input
+                      className="h-8 tabular-nums"
+                      id="area-lat"
+                      onChange={(event) =>
+                        setAreaDraft((currentDraft) => ({
+                          ...currentDraft,
+                          latitude: event.target.value
+                        }))
+                      }
+                      type="text"
+                      value={areaDraft.latitude}
+                    />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label htmlFor="area-lon" className="text-[10px] uppercase tracking-wider">
+                      Longitude
+                    </Label>
+                    <Input
+                      className="h-8 tabular-nums"
+                      id="area-lon"
+                      onChange={(event) =>
+                        setAreaDraft((currentDraft) => ({
+                          ...currentDraft,
+                          longitude: event.target.value
+                        }))
+                      }
+                      type="text"
+                      value={areaDraft.longitude}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-1">
+                  <Label htmlFor="area-rad" className="text-[10px] uppercase tracking-wider">
+                    Radius (miles)
+                  </Label>
+                  <Input
+                    className="h-8 tabular-nums"
+                    id="area-rad"
                     onChange={(event) =>
                       setAreaDraft((currentDraft) => ({
                         ...currentDraft,
@@ -3813,194 +4072,53 @@ export function FlightMap() {
                     type="text"
                     value={areaDraft.radiusMiles}
                   />
-                </label>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <Button onClick={setDraftFromMapCenter} size="sm" type="button" variant="outline">
+                    Use map center
+                  </Button>
+                  <Button onClick={useCurrentLocation} size="sm" type="button" variant="outline">
+                    {isLocating ? "Locating..." : "My location"}
+                  </Button>
+                  <Button className="ml-auto" onClick={applyAreaDraft} size="sm" type="button">
+                    Apply
+                  </Button>
+                </div>
+                {areaError ? <p className="text-xs text-destructive">{areaError}</p> : null}
               </div>
-              <div className="area-actions">
-                <button onClick={setDraftFromMapCenter} type="button">
-                  Use map center
-                </button>
-                <button onClick={useCurrentLocation} type="button">
-                  {isLocating ? "Locating..." : "Use my location"}
-                </button>
-                <button className="primary" onClick={applyAreaDraft} type="button">
-                  Apply
-                </button>
-              </div>
-              {areaError ? <p className="area-error">{areaError}</p> : null}
-            </div>
-          ) : null}
-        </div>
-        <div className="map-overlay bottom-left compact">
-          <div className="map-overlay-row">
-            <span className="map-overlay-label">Focus</span>
-            <strong>{radiusMiles} mi</strong>
+            </PopoverContent>
+          </Popover>
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <span className="uppercase tracking-wider">Source</span>
+            <span className="truncate tabular-nums">{dataSource}</span>
           </div>
-          <div className="map-overlay-row">
-            <span className="map-overlay-label">Source</span>
-            <strong>{dataSource}</strong>
+        </SidebarFooter>
+      </Sidebar>
+
+      {hoveredFlightDisplay && hoveredFlight ? (
+        <div
+          className="pointer-events-none fixed z-20 rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs shadow-md"
+          style={{
+            left: hoveredFlight.left,
+            top: hoveredFlight.top,
+            transform: "translate(8px, 8px)"
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <strong className="tabular-nums">{getPrimaryIdentifier(hoveredFlightDisplay)}</strong>
+            {hoveredFlightDisplay.aircraftType ? (
+              <Badge
+                variant="outline"
+                className="px-1 py-0 text-[9px] font-normal tabular-nums"
+              >
+                {hoveredFlightDisplay.aircraftType}
+              </Badge>
+            ) : null}
           </div>
+          <span className="text-muted-foreground">{getHoverSubtitle(hoveredFlightDisplay)}</span>
         </div>
-      </div>
-
-      <aside className="flight-card-stack">
-        <div className="stack-header">
-          <p className="eyebrow">Current Aircraft</p>
-          <h2>{displayFlights.length} flights in view</h2>
-          {nearestFlight ? (
-            <button
-              className="nearest-chip"
-              onClick={() => setSelectedFlightId(nearestFlight.id)}
-              type="button"
-            >
-              <span className="nearest-chip-label">Nearest now</span>
-              <strong>{getPrimaryIdentifier(nearestFlight)}</strong>
-              <small>{formatDistanceMiles(getDistanceFromHomeBaseMiles(nearestFlight, homeBase))}</small>
-            </button>
-          ) : null}
-        </div>
-
-        {selectedFlightDisplay ? (
-          <article className="featured-card atc-card">
-            <div className="featured-header atc-header">
-              <div>
-                <p className="feature-label">{getIdentifierLabel(selectedFlightDisplay)}</p>
-                <h3>{getPrimaryIdentifier(selectedFlightDisplay)}</h3>
-                {getSecondaryIdentifier(selectedFlightDisplay) ? (
-                  <p className="secondary-identifier">
-                    {getSecondaryIdentifier(selectedFlightDisplay)}
-                  </p>
-                ) : null}
-              </div>
-              <div className="atc-badges">
-                <span className="badge">
-                  {selectedFlightDisplay.aircraftType ?? "Unknown type"}
-                </span>
-                {activeSelectedFlightDetails?.status ? (
-                  <span className="badge badge-live">{activeSelectedFlightDetails.status}</span>
-                ) : null}
-              </div>
-            </div>
-            <dl className="flight-details atc-grid">
-              {getOperatorLabel(selectedFlightDisplay) ? (
-                <div className="atc-cell span-2">
-                  <dt>{getOperatorLabelTitle(selectedFlightDisplay)}</dt>
-                  <dd>{getOperatorLabel(selectedFlightDisplay)}</dd>
-                </div>
-              ) : null}
-              {selectedFlightDisplay.registration &&
-              getPrimaryIdentifier(selectedFlightDisplay) !== selectedFlightDisplay.registration ? (
-                <div className="atc-cell">
-                  <dt>Registration</dt>
-                  <dd>{selectedFlightDisplay.registration}</dd>
-                </div>
-              ) : null}
-              {getRouteLabel(selectedFlightDisplay) ? (
-                <div className="atc-cell span-2">
-                  <dt>Route</dt>
-                  <dd>{getRouteLabel(selectedFlightDisplay)}</dd>
-                </div>
-              ) : null}
-              {normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner) &&
-              normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner) !== getOperatorLabel(selectedFlightDisplay) ? (
-                <div className="atc-cell span-2">
-                  <dt>Owner</dt>
-                  <dd>{normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner)}</dd>
-                </div>
-              ) : null}
-              <div className="atc-stats span-2">
-                <div className="atc-stat">
-                  <dt>Distance</dt>
-                  <dd>
-                    {formatDistanceMiles(getDistanceFromHomeBaseMiles(selectedFlightDisplay, homeBase))}
-                  </dd>
-                </div>
-                <div className="atc-stat">
-                  <dt>Altitude</dt>
-                  <dd>
-                    {formatAltitude(
-                      selectedFlightDisplay.altitudeFeet,
-                      activeSelectedFlightDetails?.status
-                    )}
-                    {altitudeTrend ? (
-                      <span className={`trend-indicator ${altitudeTrend}`} aria-hidden="true">
-                        {altitudeTrend === "up" ? "↑" : "↓"}
-                      </span>
-                    ) : null}
-                  </dd>
-                </div>
-                <div className="atc-stat">
-                  <dt>Airspeed</dt>
-                  <dd>
-                    {formatAirspeed(selectedFlightDisplay.groundspeedKnots)}
-                    {airspeedTrend ? (
-                      <span className={`trend-indicator ${airspeedTrend}`} aria-hidden="true">
-                        {airspeedTrend === "up" ? "↑" : "↓"}
-                      </span>
-                    ) : null}
-                  </dd>
-                </div>
-              </div>
-            </dl>
-          </article>
-        ) : null}
-
-        <div className="flight-list">
-          {displayFlights.map((flight) => (
-            <button
-              className={`flight-list-item atc-strip ${
-                flight.id === selectedFlightDisplay?.id ? "active" : ""
-              } ${flight.id === hoveredStripFlightId ? "map-linked" : ""}`}
-              key={flight.id}
-              onBlur={() => handleStripHoverEnd(flight.id)}
-              onClick={() => setSelectedFlightId(flight.id)}
-              onFocus={() => handleStripHoverStart(flight.id)}
-              onMouseEnter={() => handleStripHoverStart(flight.id)}
-              onMouseLeave={() => handleStripHoverEnd(flight.id)}
-              ref={(node) => {
-                if (node) {
-                  stripElementRefs.current.set(flight.id, node);
-                } else {
-                  stripElementRefs.current.delete(flight.id);
-                }
-              }}
-              type="button"
-            >
-              <div className="strip-topline">
-                <strong className="strip-identifier">{getPrimaryIdentifier(flight)}</strong>
-                <span className="strip-meta">
-                  {(() => {
-                    const rankChange = stripRankChanges[flight.id];
-                    return rankChange ? (
-                      <span
-                        aria-label={rankChange > 0 ? "Moved closer" : "Moved farther"}
-                        className={`strip-rank-cue ${rankChange > 0 ? "closer" : "farther"}`}
-                        title={rankChange > 0 ? "Moved closer" : "Moved farther"}
-                      >
-                        {rankChange > 0 ? "↑" : "↓"}
-                      </span>
-                    ) : null;
-                  })()}
-                  <span
-                    className={`strip-category equipment-tag family-${getAircraftTypeFamily(flight)}`}
-                  >
-                    {flight.aircraftType ?? "UNK"}
-                  </span>
-                </span>
-              </div>
-              <div className="strip-grid">
-                <span className="strip-field">
-                  <small>Operator</small>
-                  <strong>{getListSecondaryLeft(flight)}</strong>
-                </span>
-                <span className="strip-field">
-                  <small>Route</small>
-                  <strong>{getStripRouteLabel(flight)}</strong>
-                </span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </aside>
-    </section>
+      ) : null}
+      <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
+    </>
   );
 }
