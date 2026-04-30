@@ -230,13 +230,18 @@ export const AIRCRAFT_TYPES_BY_ICAO: Readonly<Record<string, AircraftType>> = {
   TBM9: ga("TBM 900", "Daher TBM 900"),
 
   // ── Helicopters — Airbus / Eurocopter / Aérospatiale ──
-  AS50: heli("AS350 / H125", "Airbus H125 (Eurocopter AS350)"),
+  // Why: Airbus rebranded the Eurocopter line (AS350 → H125, EC130 →
+  // H130, EC135 → H135, EC145 → H145) after the 2014 acquisition, but
+  // pilots / ATC / news rosters still say "AS350" and "EC135". Use
+  // the legacy name in the badge for recognition; the full tooltip
+  // text carries both the new and old names.
+  AS50: heli("AS350", "Airbus H125 (Eurocopter AS350)"),
   AS55: heli("AS355", "Eurocopter AS355 Twin Squirrel"),
   AS65: heli("AS365", "Eurocopter AS365 Dauphin"),
   EC20: heli("EC120", "Eurocopter EC120 Colibri"),
-  EC30: heli("EC130 / H130", "Airbus H130 (Eurocopter EC130)"),
-  EC35: heli("EC135 / H135", "Airbus H135 (Eurocopter EC135)"),
-  EC45: heli("EC145 / H145", "Airbus H145 (Eurocopter EC145)"),
+  EC30: heli("EC130", "Airbus H130 (Eurocopter EC130)"),
+  EC35: heli("EC135", "Airbus H135 (Eurocopter EC135)"),
+  EC45: heli("EC145", "Airbus H145 (Eurocopter EC145)"),
   EC55: heli("EC155", "Eurocopter EC155"),
 
   // ── Helicopters — Leonardo / Agusta ──
