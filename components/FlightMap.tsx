@@ -1288,14 +1288,14 @@ export function FlightMap() {
       <Sidebar variant="floating" side="left" collapsible="offcanvas">
         <SidebarHeader className="gap-2 px-3 pt-3 pb-1">
           <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] uppercase tracking-wider text-sidebar-foreground/60">
-                In view
-              </p>
-              <h2 className="text-base font-semibold tabular-nums leading-tight">
+            <h2 className="min-w-0 flex-1 text-base leading-tight">
+              <span className="font-semibold tabular-nums">
                 {displayFlights.length} flights
-              </h2>
-            </div>
+              </span>
+              <span className="ml-1 font-normal text-sidebar-foreground/60">
+                in view
+              </span>
+            </h2>
             <ThemeToggle />
           </div>
           {nearestFlight ? (
