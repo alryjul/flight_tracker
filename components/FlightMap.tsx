@@ -611,11 +611,19 @@ export function FlightMap() {
         if (isFallbackSnapshot) {
           return currentId;
         }
+        // Keep an existing valid selection across polls; otherwise
+        // return null. The previous behavior fell back to
+        // sortedFlights[0]?.id when no selection existed, which made
+        // an explicit deselect (setSelectedFlightId(null) from the
+        // map-background click handler) un-stick on the very next
+        // poll. The user reported "takes two click-outs" — that's
+        // because click 2 had to land before the next poll could
+        // re-auto-select. With this change, null stays null until
+        // the user picks something explicitly.
         if (currentId && sortedFlights.some((flight) => flight.id === currentId)) {
           return currentId;
         }
-
-        return sortedFlights[0]?.id ?? null;
+        return null;
       });
 
       if (!isFallbackSnapshot) {
