@@ -162,13 +162,12 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
 // depends on what data is available. FLIGHT is always present;
 // FROM/TO/ROUTE adapt based on origin/destination availability.
 //
-// FLIGHT panel is always pinned to 1/3 of the card width via
-// grid-cols-[1fr_2fr] (or grid-cols-3 when 3 panels exist) so the
-// flight number's panel size doesn't grow when route panels are
-// missing — keeps the visual rhythm consistent across selection
-// changes. The 2/3 right-hand side either splits in two (FROM/TO)
-// or carries a single wider panel (FROM-only, TO-only, ROUTE
-// fallback) depending on what data we have.
+// FLIGHT panel is always pinned to 1/2 of the card width — flight
+// numbers can run 4-7 chars (WN1184, PGR1390), and the panel needs
+// width to display them legibly. The remaining 1/2 either splits
+// (FROM+TO at 1/4 each) or carries a single panel at full 1/2
+// (FROM-only / TO-only / ROUTE fallback) depending on what data
+// we have.
 function RouteGrid({ flight }: { flight: Flight }) {
   const origin = flight.origin;
   const destination = flight.destination;
@@ -183,10 +182,10 @@ function RouteGrid({ flight }: { flight: Flight }) {
     />
   );
 
-  // Both endpoints — three panels at equal 1/3 widths each.
+  // Both endpoints — FLIGHT (1/2) + FROM (1/4) + TO (1/4).
   if (origin && destination) {
     return (
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-[2fr_1fr_1fr] gap-2">
         {flightPanel}
         <HeroPanel
           label="From"
@@ -206,10 +205,10 @@ function RouteGrid({ flight }: { flight: Flight }) {
     );
   }
 
-  // Origin only — FLIGHT (1/3) + FROM (2/3).
+  // Origin only — FLIGHT (1/2) + FROM (1/2).
   if (origin) {
     return (
-      <div className="grid grid-cols-[1fr_2fr] gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {flightPanel}
         <HeroPanel
           label="From"
@@ -222,10 +221,10 @@ function RouteGrid({ flight }: { flight: Flight }) {
     );
   }
 
-  // Destination only — FLIGHT (1/3) + TO (2/3).
+  // Destination only — FLIGHT (1/2) + TO (1/2).
   if (destination) {
     return (
-      <div className="grid grid-cols-[1fr_2fr] gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {flightPanel}
         <HeroPanel
           label="To"
@@ -238,12 +237,12 @@ function RouteGrid({ flight }: { flight: Flight }) {
     );
   }
 
-  // Neither endpoint — FLIGHT (1/3) + ROUTE fallback (2/3).
+  // Neither endpoint — FLIGHT (1/2) + ROUTE fallback (1/2).
   // Mirrors FlightRouteRow's no-route fallback (VFR / Route pending).
   const fallbackText = getStripRouteLabel(flight);
   const fallbackFitsSplitFlap = fallbackText.length <= AIRPORT_CELL_LENGTH;
   return (
-    <div className="grid grid-cols-[1fr_2fr] gap-2">
+    <div className="grid grid-cols-2 gap-2">
       {flightPanel}
       <HeroPanel
         label="Route"
