@@ -212,6 +212,34 @@ export const KNOWN_AIRPORTS: Airport[] = [
   { icao: "KFHU", iata: "FHU", name: "Sierra Vista / Fort Huachuca", latitude: 31.5885, longitude: -110.3443 },
   { icao: "KNYL", iata: "YUM", name: "MCAS Yuma / Yuma International", latitude: 32.6566, longitude: -114.6061 },
 
+  // ── Police / public-safety helipads ──
+  // Why: LAPD ASD launches almost exclusively from a couple of dedicated
+  // helipads that have no IATA code (and AeroAPI emits "L lat lon"
+  // pseudo-codes for them, which then reverse-geocode to neighborhood
+  // names like "Downtown" — true but useless). Curating them lets the
+  // route field read "From Hooper" / "Lopez Canyon to BUR" instead.
+  //
+  // Convention: when an entry has no real IATA, put a readable short
+  // name (Hooper, Lopez Canyon) in the iata field — that's what
+  // displays. The icao field becomes a documentation-only agency
+  // code (LAPD-H, LAPD-L) since these helipads aren't in ICAO either.
+  // LASD Aero Bureau (Long Beach) and LAFD/CHP Air Ops (Van Nuys) are
+  // already covered by KLGB / KVNY in the LA basin section above.
+  {
+    icao: "LAPD-H",
+    iata: "Hooper",
+    name: "LAPD Hooper Memorial Heliport (Piper Tech, Downtown LA)",
+    latitude: 34.0594,
+    longitude: -118.2381
+  },
+  {
+    icao: "LAPD-L",
+    iata: "Lopez Canyon",
+    name: "LAPD Lopez Canyon Heliport (Sylmar)",
+    latitude: 34.3267,
+    longitude: -118.3978
+  },
+
   // ── Hawaii ──
   { icao: "PHNL", iata: "HNL", name: "Daniel K. Inouye (Honolulu)", latitude: 21.3187, longitude: -157.9224 },
   { icao: "PHOG", iata: "OGG", name: "Kahului (Maui)", latitude: 20.8986, longitude: -156.4305 },
