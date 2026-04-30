@@ -226,6 +226,16 @@ export function getOperatorLabel(flight: Flight) {
   return registeredOwner ?? null;
 }
 
+// Why: a flight that's flying under its own N-number (callsign === tail
+// number) and has no resolved airline isn't being run as a commercial
+// "operation" — it's a private owner flying their own plane. We use this
+// signal to swap the dt from "Operator" to "Owner". Charter/EMS/fractional
+// (CMD7, EJA471, REA15) keep their ICAO callsigns even when N-registered,
+// so they don't match this pattern and stay "Operator".
+function isFlyingUnderTailNumber(flight: Flight) {
+  return /^N\d+[A-Z]{0,2}$/.test(flight.callsign.trim().toUpperCase());
+}
+
 export function getOperatorLabelTitle(flight: Flight) {
   const operatorLabel = getOperatorLabel(flight);
 
@@ -241,8 +251,21 @@ export function getOperatorLabelTitle(flight: Flight) {
     return "Airline";
   }
 
+  // Why: agency check before owner so LAPD/CHP/sheriff helicopters —
+  // which fly under their N-numbers but read more honestly as "Agency"
+  // — don't fall into the owner branch.
   if (looksLikeAgencyLabel(operatorLabel)) {
     return "Agency";
+  }
+
+  // Why: when a flight's callsign is just its tail number and there's
+  // no operating airline string, "Owner" reads more honestly than
+  // "Operator" — it's typically a person, LLC, flying club, or flight
+  // school whose name appears via the registered-owner field. Saying
+  // "Operator: John Smith" implies a commercial operation; "Owner: John
+  // Smith" matches reality.
+  if (operatorLabel && !flight.airline && isFlyingUnderTailNumber(flight)) {
+    return "Owner";
   }
 
   return "Operator";
