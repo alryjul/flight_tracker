@@ -89,6 +89,14 @@ function getLabelLayerCategory(
 // or show as a unit (you'd never want one without the other).
 const HOME_BASE_LAYER_IDS = ["home-base-point", "home-rings"] as const;
 
+// Why: the line layer for the trail behind the selected flight,
+// driven by the selected-track GeoJSON source. Toggling this off
+// keeps the selected flight's marker visible but hides the path
+// behind it. Single layer ID so a tiny array isn't strictly needed,
+// but using the same shape as HOME_BASE_LAYER_IDS keeps the apply
+// loop uniform.
+const FLIGHT_TRAIL_LAYER_IDS = ["selected-track-line"] as const;
+
 // Why: walk every layer in the current basemap style and toggle its
 // visibility based on the user's category preferences. Called on
 // initial map load, after every setStyle (theme switch wipes layer
@@ -107,14 +115,29 @@ function applyMapLabelVisibility(
     // call eagerly without diffing.
     map.setLayoutProperty(layer.id, "visibility", target);
   }
-  // Custom home-base / focus-indicator layers are ours, not the
-  // basemap's — apply visibility to them by ID directly. They're
-  // re-added on every setStyle (theme switch), so this needs to run
-  // post-style-load like the label visibility above.
-  const homeBaseTarget = visibility.homeBaseIndicator ? "visible" : "none";
-  for (const layerId of HOME_BASE_LAYER_IDS) {
-    if (map.getLayer(layerId)) {
-      map.setLayoutProperty(layerId, "visibility", homeBaseTarget);
+  // Custom layers are ours (not the basemap's) — apply visibility by
+  // ID directly. They're re-added on every setStyle (theme switch),
+  // so this needs to run post-style-load like the label visibility
+  // above.
+  const customLayerGroups: Array<{
+    layerIds: readonly string[];
+    visible: boolean;
+  }> = [
+    {
+      layerIds: HOME_BASE_LAYER_IDS,
+      visible: visibility.homeBaseIndicator
+    },
+    {
+      layerIds: FLIGHT_TRAIL_LAYER_IDS,
+      visible: visibility.flightTrail
+    }
+  ];
+  for (const group of customLayerGroups) {
+    const target = group.visible ? "visible" : "none";
+    for (const layerId of group.layerIds) {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", target);
+      }
     }
   }
 }

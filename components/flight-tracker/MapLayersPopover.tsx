@@ -23,13 +23,15 @@ export type MapLabelVisibility = {
   roadLabels: boolean;
   poiLabels: boolean;
   homeBaseIndicator: boolean;
+  flightTrail: boolean;
 };
 
 export const DEFAULT_MAP_LABEL_VISIBILITY: MapLabelVisibility = {
   placeLabels: true,
   roadLabels: true,
   poiLabels: true,
-  homeBaseIndicator: true
+  homeBaseIndicator: true,
+  flightTrail: true
 };
 
 type MapLayersPopoverProps = {
@@ -74,6 +76,11 @@ const TOGGLE_SECTIONS: ToggleSection[] = [
         key: "homeBaseIndicator",
         label: "Home base",
         description: "Center point + search radius rings"
+      },
+      {
+        key: "flightTrail",
+        label: "Flight trail",
+        description: "Track line behind the selected flight"
       }
     ]
   }
