@@ -13,6 +13,11 @@ import { Switch } from "@/components/ui/switch";
 // highway names, "POI labels" covers business / airport / transit
 // labels. Label groupings live in MapCanvas where the visibility is
 // actually applied; this component is just the UI for the toggles.
+//
+// Note on POI: Positron's POI coverage is sparse (only poi_stadium
+// and poi_park are labeled in the style), and neither is visible at
+// city-scale zoom. The toggle still drives setLayoutProperty
+// correctly — it just has limited visible effect at common zooms.
 export type MapLabelVisibility = {
   placeLabels: boolean;
   roadLabels: boolean;
@@ -48,7 +53,7 @@ const TOGGLES: Array<{
   {
     key: "poiLabels",
     label: "POI labels",
-    description: "Businesses, airports, transit"
+    description: "Stadiums, parks (sparse at city zoom)"
   }
 ];
 
