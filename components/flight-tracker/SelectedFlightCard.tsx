@@ -175,7 +175,7 @@ function SelectedFlightCardImpl({
           <p className={LABEL_CLASS}>Route</p>
           <p
             className={cn(
-              "truncate text-sm font-medium tabular-nums",
+              "truncate text-xs font-medium tabular-nums",
               VALUE_LEADING
             )}
           >
