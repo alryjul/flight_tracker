@@ -290,6 +290,13 @@ export const KNOWN_AIRPORTS: Airport[] = [
     longitude: -118.8632
   },
   {
+    icao: "LADWP-GH",
+    iata: "LADWP Granada Hills",
+    name: "LA Department of Water & Power Granada Hills Heliport",
+    latitude: 34.2923611,
+    longitude: -118.474725
+  },
+  {
     icao: "LAFD-108",
     iata: "LAFD Engine 108",
     name: "LAFD Engine Company No. 108 Heliport",
@@ -464,7 +471,8 @@ export const AIRPORT_CODE_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = 
   "43L": "Van Nuys County Court",
   "5CL6": "Edward R. Roybal Federal Bldg",
   "CL31": "Caltrans District 7",
-  "2CN6": "LADWP HQ",
+  "2CN6": "LADWP HQ", // downtown HQ rooftop
+  "2CN2": "LADWP Granada Hills", // valley operations facility
 
   // ── Hospitals (LA-area) ──
   "35CA": "LAC+USC Medical Center",
