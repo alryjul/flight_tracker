@@ -593,6 +593,9 @@ export function mergeSelectedFlightDetailPayload(
       scheduledIn: nextDetails.scheduledIn ?? currentDetails.scheduledIn,
       estimatedIn: nextDetails.estimatedIn ?? currentDetails.estimatedIn,
       actualIn: nextDetails.actualIn ?? currentDetails.actualIn,
+      originTimezone: nextDetails.originTimezone ?? currentDetails.originTimezone,
+      destinationTimezone:
+        nextDetails.destinationTimezone ?? currentDetails.destinationTimezone,
       track
     },
     trackFreshAtMs: refreshedAtMs

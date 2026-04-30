@@ -35,6 +35,10 @@ export type SelectedFlightDetailsResponse = {
     scheduledIn: string | null;
     estimatedIn: string | null;
     actualIn: string | null;
+    // Airport timezones for formatting each end's time in its own
+    // local frame (e.g., "America/Los_Angeles", "America/New_York").
+    originTimezone: string | null;
+    destinationTimezone: string | null;
     track: Array<{
       altitudeFeet: number | null;
       groundspeedKnots: number | null;

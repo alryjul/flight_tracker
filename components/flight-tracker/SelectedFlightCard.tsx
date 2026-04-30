@@ -368,7 +368,9 @@ function SelectedFlightCardImpl({
   // Why: pull schedule times once and pass to the route row. null when
   // details aren't available (commercial pre-enrichment, GA / private
   // flights AeroAPI doesn't have data for) — route row hides the time
-  // line in that case.
+  // line in that case. originTimezone / destinationTimezone come
+  // from AeroAPI's airport objects and let each side render in its
+  // own local frame.
   const scheduleTimes: ScheduleTimes | null = details
     ? {
         scheduledOut: details.scheduledOut,
@@ -376,7 +378,9 @@ function SelectedFlightCardImpl({
         actualOut: details.actualOut,
         scheduledIn: details.scheduledIn,
         estimatedIn: details.estimatedIn,
-        actualIn: details.actualIn
+        actualIn: details.actualIn,
+        originTimezone: details.originTimezone,
+        destinationTimezone: details.destinationTimezone
       }
     : null;
 

@@ -267,6 +267,8 @@ export async function GET(request: NextRequest) {
           scheduledIn: trustedAeroApiMetadata?.scheduledIn ?? null,
           estimatedIn: trustedAeroApiMetadata?.estimatedIn ?? null,
           actualIn: trustedAeroApiMetadata?.actualIn ?? null,
+          originTimezone: trustedAeroApiMetadata?.originTimezone ?? null,
+          destinationTimezone: trustedAeroApiMetadata?.destinationTimezone ?? null,
           track: selectedTrack
         };
 
@@ -355,6 +357,8 @@ export async function GET(request: NextRequest) {
             scheduledIn: null,
             estimatedIn: null,
             actualIn: null,
+            originTimezone: null,
+            destinationTimezone: null,
             track: fallbackTrack
           }
         : null;

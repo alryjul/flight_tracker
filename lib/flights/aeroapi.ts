@@ -97,11 +97,13 @@ type AeroApiFlightRecord = {
     code: string | null;
     code_iata: string | null;
     code_icao: string | null;
+    timezone: string | null;
   } | null;
   destination: {
     code: string | null;
     code_iata: string | null;
     code_icao: string | null;
+    timezone: string | null;
   } | null;
 };
 
@@ -149,6 +151,13 @@ export type SelectedFlightDetails = {
   scheduledIn: string | null;
   estimatedIn: string | null;
   actualIn: string | null;
+  // Why: airport timezones (e.g., "America/Los_Angeles" /
+  // "America/New_York") so each side's time renders in its own
+  // airport-local frame rather than the viewer's local timezone.
+  // Boarding-pass behavior: BUR departure shows in PT, JFK arrival
+  // shows in ET, regardless of where the user is sitting.
+  originTimezone: string | null;
+  destinationTimezone: string | null;
   track: SelectedFlightTrackPoint[];
 };
 
@@ -1256,6 +1265,8 @@ export async function fetchAeroApiSelectedFlightDetails(
         scheduledIn: currentBestMatch.scheduled_in ?? null,
         estimatedIn: currentBestMatch.estimated_in ?? null,
         actualIn: currentBestMatch.actual_in ?? null,
+        originTimezone: currentBestMatch.origin?.timezone ?? null,
+        destinationTimezone: currentBestMatch.destination?.timezone ?? null,
         track
       };
 

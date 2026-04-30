@@ -242,20 +242,37 @@ export function getStripRouteLabel(flight: Flight) {
   return getRouteFallbackLabel(flight);
 }
 
-// Why: format an ISO 8601 timestamp from AeroAPI's schedule fields
-// into a short local-time string ("3:45 PM"). Returns null when the
-// input isn't a valid date so callers can skip rendering.
+// Why: format an ISO 8601 timestamp into a short time-and-zone string
+// ("3:45 PM PT"). When a timezone is provided, the time is rendered
+// in THAT zone (boarding-pass behavior — BUR departure shows in PT
+// even if the viewer is in NYC), with the zone's short name appended
+// for clarity. Without a timezone, falls back to the viewer's local
+// timezone with no zone label (we can't honestly stamp the viewer's
+// zone onto a time we know belongs to a specific airport).
 //
-// Uses the user's locale + timezone implicitly (toLocaleTimeString
-// with no explicit locale = browser default). For a flight tracker
-// the user is watching from home, that's almost always the right
-// timezone — they want to know when the flight lands in their local
-// frame, not the destination's.
-export function formatScheduleTime(iso: string | null | undefined): string | null {
+// Uses Intl.DateTimeFormat with timeZoneName: 'shortGeneric' which
+// returns DST-agnostic abbreviations ("PT" not "PDT"/"PST", "ET" not
+// "EDT"/"EST"). Friendlier for an at-a-glance UI; the precise DST
+// state isn't usually what the user is asking.
+export function formatScheduleTime(
+  iso: string | null | undefined,
+  timezone?: string | null
+): string | null {
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.valueOf())) return null;
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  const options: Intl.DateTimeFormatOptions = {
+    hour: "numeric",
+    minute: "2-digit"
+  };
+
+  if (timezone) {
+    options.timeZone = timezone;
+    options.timeZoneName = "shortGeneric";
+  }
+
+  return new Intl.DateTimeFormat([], options).format(date);
 }
 
 // Why: pick the most-current departure time available for display.
@@ -264,6 +281,10 @@ export function formatScheduleTime(iso: string | null | undefined): string | nul
 // estimated departure (the flight is in motion or about to be), or
 // "Sched" for a still-scheduled future flight (no real-time update
 // yet). Returns null when the flight has no schedule data at all.
+//
+// Time is formatted in the origin airport's timezone when available
+// — so a BUR→JFK flight reads "Dep 3:45 PM PT" (BUR's zone), not
+// the viewer's zone.
 export type ScheduleTimes = {
   scheduledOut: string | null;
   estimatedOut: string | null;
@@ -271,6 +292,8 @@ export type ScheduleTimes = {
   scheduledIn: string | null;
   estimatedIn: string | null;
   actualIn: string | null;
+  originTimezone: string | null;
+  destinationTimezone: string | null;
 };
 
 export type ScheduleTimeDisplay = {
@@ -281,13 +304,14 @@ export type ScheduleTimeDisplay = {
 export function getDepartureTimeDisplay(
   times: ScheduleTimes
 ): ScheduleTimeDisplay | null {
-  const actual = formatScheduleTime(times.actualOut);
+  const tz = times.originTimezone;
+  const actual = formatScheduleTime(times.actualOut, tz);
   if (actual) return { label: "Dep", time: actual };
 
-  const estimated = formatScheduleTime(times.estimatedOut);
+  const estimated = formatScheduleTime(times.estimatedOut, tz);
   if (estimated) return { label: "Dep", time: estimated };
 
-  const scheduled = formatScheduleTime(times.scheduledOut);
+  const scheduled = formatScheduleTime(times.scheduledOut, tz);
   if (scheduled) return { label: "Sched", time: scheduled };
 
   return null;
@@ -297,17 +321,19 @@ export function getDepartureTimeDisplay(
 // reflect arrival semantics. "Arr" for actual landing (already
 // happened), "ETA" for estimated arrival (in-flight prediction),
 // "Sched" for the original schedule (pre-departure or no
-// estimate yet).
+// estimate yet). Time is formatted in the destination airport's
+// timezone — JFK arrival reads "ETA 7:58 PM ET".
 export function getArrivalTimeDisplay(
   times: ScheduleTimes
 ): ScheduleTimeDisplay | null {
-  const actual = formatScheduleTime(times.actualIn);
+  const tz = times.destinationTimezone;
+  const actual = formatScheduleTime(times.actualIn, tz);
   if (actual) return { label: "Arr", time: actual };
 
-  const estimated = formatScheduleTime(times.estimatedIn);
+  const estimated = formatScheduleTime(times.estimatedIn, tz);
   if (estimated) return { label: "ETA", time: estimated };
 
-  const scheduled = formatScheduleTime(times.scheduledIn);
+  const scheduled = formatScheduleTime(times.scheduledIn, tz);
   if (scheduled) return { label: "Sched", time: scheduled };
 
   return null;
