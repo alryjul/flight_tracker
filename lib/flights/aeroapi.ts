@@ -2,6 +2,7 @@ import {
   parseLatLonPseudoCode,
   reverseGeocodeLocationLabel
 } from "@/lib/flights/reverseGeocode";
+import { applyAirportCodeDisplayOverride } from "@/lib/flights/laAirports";
 import { getDiscoveryScore, isCommercialCallsignString } from "@/lib/flights/scoring";
 import { isUnlikelyToHaveAeroApiData } from "@/lib/flights/squawk";
 import { resolveAirlineName } from "@/lib/flights/airlines";
@@ -233,15 +234,18 @@ function normalizeAirportCode(input: {
   if (!input) {
     return null;
   }
-  // IATA/ICAO always preferred when present.
-  if (input.code_iata) return input.code_iata;
-  if (input.code_icao) return input.code_icao;
+  // IATA/ICAO always preferred when present. The display-override map
+  // rewrites known FAA private-use codes (e.g., "58CA" → "LAPD Hooper
+  // Heliport") to their canonical readable name, matching what the
+  // track-inference path produces for the same lat/lon.
+  if (input.code_iata) return applyAirportCodeDisplayOverride(input.code_iata);
+  if (input.code_icao) return applyAirportCodeDisplayOverride(input.code_icao);
   // Bare `code` is fine UNLESS it's the lat/lon pseudo-code AeroAPI emits
   // for non-airport origins (heliports, ad-hoc spots). Those get resolved
   // separately via resolveAirportOrLocationLabel — return null here so
   // the resolver kicks in.
   if (input.code && parseLatLonPseudoCode(input.code) == null) {
-    return input.code;
+    return applyAirportCodeDisplayOverride(input.code);
   }
   return null;
 }
@@ -259,14 +263,14 @@ async function resolveAirportOrLocationLabel(
   } | null
 ): Promise<string | null> {
   if (!input) return null;
-  if (input.code_iata) return input.code_iata;
-  if (input.code_icao) return input.code_icao;
+  if (input.code_iata) return applyAirportCodeDisplayOverride(input.code_iata);
+  if (input.code_icao) return applyAirportCodeDisplayOverride(input.code_icao);
   if (input.code) {
     const coords = parseLatLonPseudoCode(input.code);
     if (coords) {
       return await reverseGeocodeLocationLabel(coords.latitude, coords.longitude);
     }
-    return input.code;
+    return applyAirportCodeDisplayOverride(input.code);
   }
   return null;
 }

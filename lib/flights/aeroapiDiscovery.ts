@@ -1,5 +1,6 @@
 import { distanceBetweenPointsMiles, milesToLatitudeDelta, milesToLongitudeDelta } from "@/lib/geo";
 import { getDiscoveryScore } from "@/lib/flights/scoring";
+import { applyAirportCodeDisplayOverride } from "@/lib/flights/laAirports";
 import { resolveAirlineName } from "@/lib/flights/airlines";
 import type { Flight } from "@/lib/flights/types";
 
@@ -80,7 +81,11 @@ function normalizeAirportCode(input: {
     return null;
   }
 
-  return input.code_iata || input.code_icao || input.code || null;
+  // Prefer IATA → ICAO → bare code, then run through the display
+  // override so known FAA private-use codes (e.g., "58CA" for LAPD
+  // Hooper) resolve to their canonical readable name.
+  const raw = input.code_iata || input.code_icao || input.code || null;
+  return applyAirportCodeDisplayOverride(raw);
 }
 
 function getCallsign(input: AeroApiDiscoveryFlight): string | null {

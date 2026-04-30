@@ -214,27 +214,31 @@ export const KNOWN_AIRPORTS: Airport[] = [
 
   // ── Police / public-safety helipads ──
   // Why: LAPD ASD launches almost exclusively from a couple of dedicated
-  // helipads that have no IATA code (and AeroAPI emits "L lat lon"
-  // pseudo-codes for them, which then reverse-geocode to neighborhood
-  // names like "Downtown" — true but useless). Curating them lets the
-  // route field read "From Hooper" / "Lopez Canyon to BUR" instead.
+  // helipads that have no IATA code. AeroAPI returns either "L lat lon"
+  // pseudo-codes (which then reverse-geocode to neighborhood names like
+  // "Downtown") or FAA LIDs like "58CA" — neither of which a casual
+  // reader would recognize. Curating these entries (combined with the
+  // AIRPORT_CODE_DISPLAY_OVERRIDES table below) lets the route field
+  // read "From LAPD Hooper Heliport" / "LAPD Hooper Heliport to BUR"
+  // regardless of whether the AeroAPI path or the track-inference path
+  // filled the origin.
   //
-  // Convention: when an entry has no real IATA, put a readable short
-  // name (Hooper, Lopez Canyon) in the iata field — that's what
-  // displays. The icao field becomes a documentation-only agency
-  // code (LAPD-H, LAPD-L) since these helipads aren't in ICAO either.
-  // LASD Aero Bureau (Long Beach) and LAFD/CHP Air Ops (Van Nuys) are
-  // already covered by KLGB / KVNY in the LA basin section above.
+  // Convention: when an entry has no real IATA, put the canonical
+  // readable name in the iata field — that's what the display shows.
+  // The icao field becomes a documentation-only agency code (LAPD-H,
+  // LAPD-L) since these helipads aren't in ICAO either. LASD Aero
+  // Bureau (Long Beach) and LAFD/CHP Air Ops (Van Nuys) are already
+  // covered by KLGB / KVNY in the LA basin section above.
   {
     icao: "LAPD-H",
-    iata: "Hooper",
+    iata: "LAPD Hooper Heliport",
     name: "LAPD Hooper Memorial Heliport (Piper Tech, Downtown LA)",
     latitude: 34.0594,
     longitude: -118.2381
   },
   {
     icao: "LAPD-L",
-    iata: "Lopez Canyon",
+    iata: "LAPD Lopez Canyon Heliport",
     name: "LAPD Lopez Canyon Heliport (Sylmar)",
     latitude: 34.3267,
     longitude: -118.3978
@@ -250,3 +254,32 @@ export const KNOWN_AIRPORTS: Airport[] = [
   { icao: "PANC", iata: "ANC", name: "Ted Stevens Anchorage", latitude: 61.1742, longitude: -149.9962 },
   { icao: "PAFA", iata: "FAI", name: "Fairbanks International", latitude: 64.8151, longitude: -147.856 }
 ];
+
+// Why: AeroAPI sometimes returns FAA private-use heliport codes
+// ("58CA", various others) for facilities that have no IATA — the route
+// then reads as a meaningless five-character string. This map rewrites
+// those codes at the AeroAPI normalization step to the same canonical
+// readable name that the track-inference path uses, so both paths
+// agree on the display string regardless of which one filled origin.
+//
+// Add an entry when you spot a flight whose route reads as a numeric
+// FAA LID instead of a recognizable name. Match keys are upper-case;
+// codes are normalized before lookup.
+export const AIRPORT_CODE_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = {
+  "58CA": "LAPD Hooper Heliport"
+  // Lopez Canyon's FAA LID is unconfirmed — add when discovered.
+};
+
+// Why: thin wrapper that handles trim+upper normalization + null pass-
+// through, so call sites don't have to. Returns the override when one
+// exists, otherwise the original code unchanged. Returns null only
+// when input is null.
+export function applyAirportCodeDisplayOverride(
+  code: string | null | undefined
+): string | null {
+  if (!code) return null;
+  const trimmed = code.trim();
+  if (trimmed.length === 0) return null;
+  const upper = trimmed.toUpperCase();
+  return AIRPORT_CODE_DISPLAY_OVERRIDES[upper] ?? trimmed;
+}
