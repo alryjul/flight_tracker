@@ -183,7 +183,7 @@ function AirportValue({ code }: { code: string }) {
             {code}
           </p>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-xs">
+        <TooltipContent side="bottom" align="start" className="max-w-xs">
           <span>{airport.name}</span>
         </TooltipContent>
       </Tooltip>
