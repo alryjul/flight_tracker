@@ -290,11 +290,132 @@ export const KNOWN_AIRPORTS: Airport[] = [
     longitude: -118.8632
   },
   {
+    icao: "LAFD-108",
+    iata: "LAFD Engine 108",
+    name: "LAFD Engine Company No. 108 Heliport",
+    latitude: 34.1267889,
+    longitude: -118.4064889
+  },
+  {
+    icao: "LAFD-109",
+    iata: "LAFD Engine 109",
+    name: "LAFD Engine Company No. 109 Heliport (Van Nuys)",
+    latitude: 34.1307806,
+    longitude: -118.4905222
+  },
+
+  // ── Hospitals (LA-area) ──
+  // Why: medical helicopters (REACH, CALSTAR, PHI Air Med, hospital
+  // EMS) regularly take off from and land at these helipads. Without
+  // entries, takeoffs reverse-geocode to neighborhood names; AeroAPI
+  // returns FAA LIDs like "CA46" / "29CL" which mean nothing to
+  // readers. Each entry pairs with a code override below.
+  {
+    icao: "CA-CSMC",
+    iata: "Cedars-Sinai Medical Center",
+    name: "Cedars-Sinai Medical Center Heliport",
+    latitude: 34.0763222,
+    longitude: -118.3814667
+  },
+  {
+    icao: "CA-CHLA",
+    iata: "Children's Hospital LA",
+    name: "Children's Hospital Los Angeles Heliport",
+    latitude: 34.0973333,
+    longitude: -118.2909028
+  },
+  {
+    // Why: Children's Hospital LA has two FAA-registered helipads
+    // (29CL and 4CN7) on the same campus, ~200 ft apart. Both
+    // display as the same canonical name; track inference will
+    // resolve to whichever is closer to the takeoff point.
+    icao: "CA-CHLA2",
+    iata: "Children's Hospital LA",
+    name: "Children's Hospital Los Angeles Heliport II",
+    latitude: 34.0972917,
+    longitude: -118.2886333
+  },
+  {
+    icao: "CA-HPMC",
+    iata: "Hollywood Presbyterian",
+    name: "Hollywood Presbyterian Medical Center Heliport",
+    latitude: 34.0964222,
+    longitude: -118.2903306
+  },
+  {
+    icao: "CA-UCLA",
+    iata: "UCLA Medical Center",
+    name: "Ronald Reagan UCLA Medical Center Helistop",
+    latitude: 34.0667361,
+    longitude: -118.4463833
+  },
+  {
+    icao: "CA-VAGLA",
+    iata: "VA Greater LA Healthcare",
+    name: "VA Greater Los Angeles Health Care Center Heliport",
+    latitude: 34.0497222,
+    longitude: -118.4561111
+  },
+  {
+    icao: "CA-SJMC",
+    iata: "St Joseph Medical Center",
+    name: "Providence St Joseph Medical Center Heliport (Burbank)",
+    latitude: 34.1552972,
+    longitude: -118.3279
+  },
+  {
+    icao: "CA-SOH",
+    iata: "Sherman Oaks Hospital",
+    name: "Sherman Oaks Hospital Heliport",
+    latitude: 34.1599278,
+    longitude: -118.4495056
+  },
+  {
+    icao: "CA-AHGL",
+    iata: "Adventist Health Glendale",
+    name: "Adventist Health Glendale Medical Center Heliport",
+    latitude: 34.1516917,
+    longitude: -118.2305722
+  },
+  {
+    icao: "CA-CHMC",
+    iata: "California Hospital Med Center",
+    name: "California Hospital Medical Center Heliport",
+    latitude: 34.035,
+    longitude: -118.2663306
+  },
+  {
+    icao: "CA-GSH",
+    iata: "Good Samaritan Hospital",
+    name: "Good Samaritan Hospital Heliport",
+    latitude: 34.0548472,
+    longitude: -118.2649722
+  },
+  {
     icao: "LAC-USC",
     iata: "LAC+USC Medical Center",
     name: "Los Angeles County / USC Medical Center Heliport",
     latitude: 34.0597,
     longitude: -118.2118
+  },
+
+  // ── Media (TV station helipads) ──
+  // Why: news helicopters launch from / land at TV station helipads
+  // for live coverage handoffs. Common in LA's heavy news-coverage
+  // operating environment.
+  {
+    icao: "MEDIA-ABC",
+    iata: "ABC-TV Hollywood",
+    name: "ABC-TV Heliport (Hollywood)",
+    latitude: 34.1034694,
+    longitude: -118.2793639
+  },
+  {
+    icao: "MEDIA-ABC7",
+    iata: "ABC7-TV Glendale",
+    name: "ABC7-TV Heliport (Glendale)",
+    latitude: 34.1572944,
+    longitude: -118.2887167
   },
 
   // ── Hawaii ──
@@ -328,18 +449,72 @@ export const AIRPORT_CODE_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = 
   "4CA0": "LAPD Hooper Heliport", // alternate LID, same facility per FAA records
 
   // ── LASD ──
-  "3CA5": "LASD West Hollywood Helistop", // West Hollywood Sheriff's Helistop
-  "3CN5": "LASD South LA Heliport", // South LA Heliport
-  "7L5": "LASD Monterey Park Heliport", // main LASD Aero Bureau facility (Monterey Park)
+  "3CA5": "LASD West Hollywood Helistop",
+  "3CN5": "LASD South LA Heliport",
+  "7L5": "LASD Monterey Park Heliport",
 
-  // ── LAFD / city government ──
-  "59L": "LAFD City Hall East Heliport", // LA City Hall East rooftop, operated by LAFD
+  // ── LAFD ──
+  "59L": "LAFD City Hall East Heliport", // City Hall rooftop, LAFD-operated
+  "60L": "LAFD Engine 108",
+  "61L": "LAFD Engine 109",
 
-  // ── LA County Fire ──
-  "1CA9": "LA County Fire Heliport", // FAA ARP differs from listed address; code-override is authoritative
+  // ── LA County government ──
+  "1CA9": "LA County Fire Heliport",
+  "21CN": "LA County Vermont Corridor",
+  "43L": "Van Nuys County Court",
+  "5CL6": "Edward R. Roybal Federal Bldg",
+  "CL31": "Caltrans District 7",
+  "2CN6": "LADWP HQ",
 
-  // ── Public hospitals (county/municipal) ──
-  "35CA": "LAC+USC Medical Center" // LA County / USC Medical Center
+  // ── Hospitals (LA-area) ──
+  "35CA": "LAC+USC Medical Center",
+  "CA46": "Cedars-Sinai Medical Center",
+  "29CL": "Children's Hospital LA",
+  "4CN7": "Children's Hospital LA", // II — same campus as 29CL
+  "CL70": "Hollywood Presbyterian",
+  "0CL7": "Good Samaritan Hospital",
+  "0CA2": "VA Greater LA Healthcare",
+  "75CL": "UCLA Medical Center",
+  "CL80": "Sherman Oaks Hospital",
+  "CL12": "St Vincent Med Office Bldg",
+  "CA95": "St Joseph Medical Center",
+  "CL06": "Adventist Health Glendale",
+  "CA23": "California Hospital Med Center",
+
+  // ── Media (TV stations) ──
+  "22CN": "ABC-TV Hollywood",
+  "06CL": "ABC7-TV Glendale",
+
+  // ── Hotels / commercial buildings (rare ops, mostly emergency egress) ──
+  // Why: helicopters almost never land at these; the helipads exist
+  // for tower emergency evacuation. But when one does show up in the
+  // route field, a recognizable name beats a numeric LID.
+  "CL90": "Pendry Hotel WeHo",
+  "84CA": "Beverly Center",
+  "3CA6": "5670 Wilshire",
+  "44L": "Wilshire Area",
+  "84CL": "Century City",
+  "70CA": "The Wilshire Thayer",
+  "5CA0": "DreamWorks Glendale",
+  "CN39": "Operating Engineers PT Bldg",
+  "55CN": "Sunset-Glendale",
+  "CL50": "Westwood Gateway",
+  "2CL7": "Glendale Plaza",
+  "CL19": "BoA Glendale",
+  "0CL4": "700 N Brand Glendale",
+  "CL32": "Garland Center",
+  "3CL7": "OCA",
+  "2CA6": "660 Figueroa",
+  "CL49": "International Tower",
+  "CN25": "Westin Bonaventure",
+  "87CL": "City National Plaza",
+  "CL54": "Westside Towers",
+  "3CL5": "Chase Plaza",
+  "CL08": "Biltmore Hotel",
+  "4CA1": "City National Bank",
+  "46CL": "South Park Center",
+  "9CA5": "California Market Center",
+  "6CA0": "Hotel New Otani"
 };
 
 // Why: thin wrapper that handles trim+upper normalization + null pass-
