@@ -17,24 +17,13 @@ import {
 import { isOperatingVfr } from "@/lib/flights/squawk";
 import type { AeroApiFeedMetadata } from "@/lib/flights/aeroapi";
 import {
-  formatAirspeed,
-  formatAltitude,
   getAircraftTypeFamily,
   getCompactRouteLabel,
-  getHoverSubtitle,
-  getIdentifierLabel,
-  getListSecondaryLeft,
-  getOperatorLabel,
-  getOperatorLabelTitle,
   getPrimaryIdentifier,
-  getRouteLabel,
-  getSecondaryIdentifier,
-  getStripRouteLabel,
   isFlightVfrForLabel,
   looksLikeAgencyLabel,
   looksLikeGeneralAviationFlight,
   looksLikeManufacturerName,
-  normalizeRegisteredOwnerLabel,
   refreshVfrLatchIfApplicable
 } from "@/lib/flights/display";
 import { getFlightMetricHistory, getMetricTrend } from "@/lib/flights/metrics";
@@ -94,7 +83,6 @@ import {
   sanitizeBreadcrumbPoints,
   setSelectedTrackSourceData
 } from "@/lib/map/trails";
-import { cn } from "@/lib/utils";
 import {
   Sidebar,
   SidebarContent,
@@ -102,239 +90,65 @@ import {
   SidebarHeader,
   SidebarTrigger
 } from "@/components/ui/sidebar";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AreaConfigPopover } from "@/components/flight-tracker/AreaConfigPopover";
+import { FlightList } from "@/components/flight-tracker/FlightList";
+import { MapHoverCard } from "@/components/flight-tracker/MapHoverCard";
+import { SelectedFlightCard } from "@/components/flight-tracker/SelectedFlightCard";
+import { SourceStatusFooter } from "@/components/flight-tracker/SourceStatusFooter";
 
-type FlightApiResponse = {
-  center: {
-    latitude: number;
-    longitude: number;
-  };
-  flights: Flight[];
-  radiusMiles: number;
-  source: string;
-};
-
-type HomeBaseCenter = {
-  latitude: number;
-  longitude: number;
-};
-
-type SelectedFlightDetailsResponse = {
-  details: {
-    aircraftType: string | null;
-    airline: string | null;
-    destination: string | null;
-    faFlightId: string | null;
-    flightNumber: string | null;
-    origin: string | null;
-    registration: string | null;
-    registeredOwner: string | null;
-    status: string | null;
-    track: Array<{
-      altitudeFeet: number | null;
-      groundspeedKnots: number | null;
-      heading: number | null;
-      latitude: number;
-      longitude: number;
-      timestamp: string;
-    }>;
-  } | null;
-  source: string;
-};
-
-type HoveredFlightState = {
-  flightId: string;
-  left: number;
-  top: number;
-};
-
-type FlightSnapshot = {
-  capturedAt: number;
-  flights: Flight[];
-  flightsById: Map<string, Flight>;
-};
-
-// Why: critically-damped spring chase. Each "chase episode" begins when a new
-// reported position arrives — we capture the icon's current visual position
-// as `from`, set `target` to the new reported position, and stamp
-// `targetSetAt` with the current frame time. Between updates the rendered
-// position evolves continuously toward target via
-//   pos(t) = target + (from - target) × exp(-(t - targetSetAt) / SPRING_TAU_SEC)
-// The cap timestamp follows the same recurrence with the same time constant
-// (`fromProviderTimestampSec` chases `lastProviderTimestampSec`), keeping it
-// in lockstep with the icon — that's the invariant that prevents the trail
-// from leading the dot.
-type FlightAnimationState = {
-  averageProviderDeltaSec: number | null;
-  identityKey: string;
-
-  // --- Position chase ---
-  fromLatitude: number;
-  fromLongitude: number;
-  targetLatitude: number;
-  targetLongitude: number;
-
-  // --- Cap-timestamp chase (matched τ → matches lag dynamics) ---
-  fromProviderTimestampSec: number | null;
-  lastProviderTimestampSec: number | null;
-
-  // --- Chase episode anchor ---
-  // Frame time (performance.now base) when the current target was set.
-  // All spring evaluations use elapsed = (frameTime - targetSetAt) / 1000.
-  targetSetAt: number;
-
-  // --- Auxiliary (heading/speed for trail filtering, breadcrumbs, debug) ---
-  targetGroundspeedKnots: number | null;
-  targetHeadingDegrees: number | null;
-};
-
-type BreadcrumbPoint = {
-  coordinate: [number, number];
-  providerTimestampSec: number | null;
-};
-
-type FlightBreadcrumbBuffer = {
-  points: BreadcrumbPoint[];
-  lastSeenAt: number;
-};
-
-type SelectedTrackPoint = NonNullable<SelectedFlightDetailsResponse["details"]>["track"][number];
-
-type TrendDirection = "up" | "down" | null;
-
-type RememberedFlightMetadata = Partial<
-  Pick<Flight, "aircraftType" | "registration" | "registeredOwner">
->;
-
-type IdentityScopedValue<T> = {
-  identityKey: string;
-  value: T;
-};
-
-const refreshMs = 4000;
-const HIDDEN_TAB_REFRESH_MS = 30_000;
-const PROXIMITY_RING_MILES = [3, 8];
-const HOME_BASE_STORAGE_KEY = "flight-tracker-home-base";
-const VISIBLE_FLIGHT_LIMIT = 50;
-const VISIBLE_FLIGHT_ENTRY_COUNT = 45;
-// Why: bumping the exit rank from 60 → 80 widens the hysteresis band a
-// flight has to cross before it gets retracted. Combined with the score's
-// hard horizons (which prevent far-away GA from competing for top-50 slots
-// at all), this leaves the visible set very stable over time.
-const VISIBLE_FLIGHT_EXIT_RANK = 80;
-// Why: 60 s linger means a flight that just slipped past the exit rank
-// hangs around long enough for a couple of polls to confirm or refute the
-// drop, masking any remaining single-poll score jitter.
-const VISIBLE_FLIGHT_LINGER_MS = 1000 * 60;
-
-// Why: ranking tier model lives in lib/flights/scoring.ts so the server
-// (discovery slice) and client (visible-flight rank) never drift apart.
-// See that module for the full tier semantics + tuning rationale.
-const STRIP_REORDER_INTERVAL_MS = 24000;
-const STRIP_REORDER_RANK_THRESHOLD = 2;
-const STRIP_REORDER_SCORE_THRESHOLD = 1.25;
-const STRIP_RANK_CUE_MS = 2200;
-const SNAPSHOT_HISTORY_RETENTION_MS = refreshMs * 18;
-// Why: snapshot history is pruned aggressively (72s) because it drives
-// animation interpolation and per-poll change detection — it doesn't need
-// long memory. But the *selected flight's* breadcrumb trail benefits from
-// far more history: a hovering GA helicopter watched for 20 minutes should
-// still show its flight path, not just the last 72s. The per-flight buffer
-// below is independent of the snapshot pruning.
-const FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS = 600;
-const FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS = 1000 * 60 * 30;
-// Why: a gap larger than this in a per-flight breadcrumb buffer is a
-// strong signal of a landing → ramp time → takeoff sequence (the aircraft
-// stops transmitting on the ground for many minutes). When that happens
-// the prior leg's breadcrumbs would otherwise paint a connecting line
-// from the old leg's last position to the new leg's start. Wipe the
-// buffer so each leg's breadcrumbs are independent. Mirrors adsb.lol's
-// isolateCurrentLeg threshold.
-const BREADCRUMB_LEG_BREAK_GAP_MS = 1000 * 60 * 15;
-const SELECTED_TRACK_REFRESH_GRACE_MS = 1000 * 30;
-const MAX_TRACK_SEGMENT_MILES = 320;
-const MAX_TRACK_TO_AIRCRAFT_MILES = 2.5;
-// Why: the bridge connects the trace tail to the first live breadcrumb
-// when the temporal-overlap filter has already dropped breadcrumbs the
-// trace covers. In nominal operation that gap is small (just past the
-// trace's ~1 min lag with adsb.lol full+recent merged). In edge cases —
-// brief feeder coverage holes, very fast aircraft, late selection — the
-// gap can stretch. We prefer a continuous visual line over a disjoint
-// for any plausible same-flight gap, only refusing to bridge when the
-// distance is so extreme the data is almost certainly corrupted (e.g.,
-// stale trace from a previous flight bleeding through). 100 mi covers
-// ~12 min of jet cruise or ~50 min of helicopter — comfortably past
-// realistic coverage holes, comfortably short of mistaken-flight
-// territory.
-const MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES = 100;
-const MIN_POSITION_CHANGE_MILES = 0.03;
-const MAX_POSITION_JITTER_DEADBAND_MILES = 0.12;
-// Why: critically-damped spring time constant for the icon-position chase.
-// The rendered icon evolves toward the latest reported position via
-//   pos += (target - pos) × (1 - exp(-dt / τ))
-// In steady-state linear motion with poll interval P, the icon's lag behind
-// the *latest reported position* settles at
-//   L* = P × τ_avg / (1 - exp(-P/τ))
-// which for our P ≈ 4s polls gives ~10 s of icon-lag at τ = 8 s. The cap
-// timestamp uses the same τ so trail and icon move in lockstep — that's
-// the invariant that prevents the trail from leading the dot.
-//
-// Tuning intuition: bigger τ = laxer chase = more lag, more glide.
-// Smaller τ = stiffer chase = less lag, more reactive (visible "snaps" on
-// turns at very small τ). 6 s is the "ambient buttery glide" sweet spot.
-const SPRING_TAU_SEC = 8;
-// Why: on page load (or when a flight first enters the viewport), the
-// spring has nowhere to chase if from = target — icons sit static until the
-// next poll lands. We bootstrap by extrapolating the target forward by
-// the reported data lag (now − provider timestamp) along the reported
-// heading × groundspeed, giving the spring an immediate target to chase.
-// Capped because positionTimestampSec can be unreliable for stale or
-// outlier reports — 10 s is a generous ceiling that still bounds visible
-// "wrong direction" extrapolation if heading happens to be wrong.
-const BOOTSTRAP_MAX_EXTRAPOLATION_SEC = 10;
-// Why: tuning factors used in two or more places. Naming them (a) makes the
-// intent obvious at the call site and (b) prevents the values drifting apart
-// when one spot gets tweaked.
-//
-// PROVIDER_DELTA_EMA_DECAY: the new sample's weight is (1 - decay). Larger
-//   decay = slower to react to changing poll cadence. 0.65 gives ~3 polls
-//   of effective averaging. Used by the diagnostic and could be useful if
-//   we ever want τ to adapt to actual poll cadence.
-//
-// DEADBAND_FRACTION_OF_EXPECTED_MOVE: tiny moves below this fraction of
-//   the expected per-poll move are treated as jitter and suppressed. 0.25
-//   = a quarter of expected move, which is small enough to keep the icon
-//   visibly responsive yet kills GPS noise on parked aircraft.
-const PROVIDER_DELTA_EMA_DECAY = 0.65;
-const DEADBAND_FRACTION_OF_EXPECTED_MOVE = 0.25;
-const ALTITUDE_TREND_THRESHOLD_FEET = 100;
-const AIRSPEED_TREND_THRESHOLD_KNOTS = 5;
-const METRIC_TREND_LOOKBACK_MS = 1000 * 30;
-const MIN_METRIC_TREND_POINTS = 3;
-const SELECTED_ENRICHMENT_RETRY_DELAYS_MS = [6000, 18000, 36000];
-const STRIP_HOVER_ECHO_DURATION_MS = 1400;
-const STRIP_HOVER_ECHO_BASE_RADIUS = 13;
-const STRIP_HOVER_ECHO_GROWTH = 14;
-const MAX_BREADCRUMB_OVERLAP_MILES = 0.18;
-// Why: when a new poll lands the breadcrumb is appended at the freshly
-// reported provider position INSTANTLY, while the icon starts a multi-second
-// lerp from its previous rendered position toward that same target. During
-// the lerp the breadcrumb sits at a position the icon hasn't visually reached
-// yet — so the rendered LineString goes (provider_track) → (breadcrumb_at_new_pos)
-// → (icon_at_lerp_pos), which paints a forward-then-back zigzag past the dot.
-// Filter breadcrumbs whose forward projection on the icon's heading exceeds
-// this tolerance — that drops the in-flight-lerp breadcrumbs without losing
-// behind-the-dot ones. ~8 m tolerance keeps the filter from oscillating on
-// rounding noise near zero.
-const BREADCRUMB_LEAD_TOLERANCE_MILES = 0.005;
+import type {
+  BreadcrumbPoint,
+  FlightAnimationState,
+  FlightApiResponse,
+  FlightBreadcrumbBuffer,
+  FlightSnapshot,
+  HomeBaseCenter,
+  HoveredFlightState,
+  IdentityScopedValue,
+  RememberedFlightMetadata,
+  SelectedFlightDetailsResponse,
+  SelectedTrackPoint,
+  TrendDirection
+} from "@/lib/types/flight-map";
+import {
+  AIRSPEED_TREND_THRESHOLD_KNOTS,
+  ALTITUDE_TREND_THRESHOLD_FEET,
+  BOOTSTRAP_MAX_EXTRAPOLATION_SEC,
+  BREADCRUMB_LEAD_TOLERANCE_MILES,
+  BREADCRUMB_LEG_BREAK_GAP_MS,
+  DEADBAND_FRACTION_OF_EXPECTED_MOVE,
+  FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS,
+  FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS,
+  HIDDEN_TAB_REFRESH_MS,
+  HOME_BASE_STORAGE_KEY,
+  MAX_BREADCRUMB_OVERLAP_MILES,
+  MAX_POSITION_JITTER_DEADBAND_MILES,
+  MAX_PROVIDER_TO_BREADCRUMB_CONNECT_MILES,
+  MAX_TRACK_SEGMENT_MILES,
+  MAX_TRACK_TO_AIRCRAFT_MILES,
+  METRIC_TREND_LOOKBACK_MS,
+  MIN_METRIC_TREND_POINTS,
+  MIN_POSITION_CHANGE_MILES,
+  PROVIDER_DELTA_EMA_DECAY,
+  PROXIMITY_RING_MILES,
+  SELECTED_ENRICHMENT_RETRY_DELAYS_MS,
+  SELECTED_TRACK_REFRESH_GRACE_MS,
+  SNAPSHOT_HISTORY_RETENTION_MS,
+  SPRING_TAU_SEC,
+  STRIP_HOVER_ECHO_BASE_RADIUS,
+  STRIP_HOVER_ECHO_DURATION_MS,
+  STRIP_HOVER_ECHO_GROWTH,
+  STRIP_RANK_CUE_MS,
+  STRIP_REORDER_INTERVAL_MS,
+  STRIP_REORDER_RANK_THRESHOLD,
+  STRIP_REORDER_SCORE_THRESHOLD,
+  VISIBLE_FLIGHT_ENTRY_COUNT,
+  VISIBLE_FLIGHT_EXIT_RANK,
+  VISIBLE_FLIGHT_LIMIT,
+  VISIBLE_FLIGHT_LINGER_MS,
+  refreshMs
+} from "@/lib/config/flight-map-constants";
 
 export function FlightMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -2186,324 +2000,47 @@ export function FlightMap() {
 
         <SidebarContent className="gap-0 px-2">
           {selectedFlightDisplay ? (
-            <Card className="mx-1 mt-2 mb-2 gap-3 py-3">
-              <CardHeader className="gap-1 px-3">
-                <CardDescription className="text-[10px] uppercase tracking-wider">
-                  {getIdentifierLabel(selectedFlightDisplay)}
-                </CardDescription>
-                <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-lg leading-tight tabular-nums">
-                    {getPrimaryIdentifier(selectedFlightDisplay)}
-                  </CardTitle>
-                  <div className="flex flex-wrap justify-end gap-1">
-                    <Badge variant="secondary" className="text-[10px]">
-                      {selectedFlightDisplay.aircraftType ?? "Unknown type"}
-                    </Badge>
-                    {activeSelectedFlightDetails?.status ? (
-                      <Badge className="text-[10px]">
-                        {activeSelectedFlightDetails.status}
-                      </Badge>
-                    ) : null}
-                  </div>
-                </div>
-                {getSecondaryIdentifier(selectedFlightDisplay) ? (
-                  <p className="text-xs text-muted-foreground">
-                    {getSecondaryIdentifier(selectedFlightDisplay)}
-                  </p>
-                ) : null}
-              </CardHeader>
-              <CardContent className="px-3">
-                <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                  {getOperatorLabel(selectedFlightDisplay) ? (
-                    <div className="col-span-2 min-w-0">
-                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        {getOperatorLabelTitle(selectedFlightDisplay)}
-                      </dt>
-                      <dd className="truncate font-medium">
-                        {getOperatorLabel(selectedFlightDisplay)}
-                      </dd>
-                    </div>
-                  ) : null}
-                  {selectedFlightDisplay.registration &&
-                  getPrimaryIdentifier(selectedFlightDisplay) !== selectedFlightDisplay.registration ? (
-                    <div className="min-w-0">
-                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Registration
-                      </dt>
-                      <dd className="truncate font-medium tabular-nums">
-                        {selectedFlightDisplay.registration}
-                      </dd>
-                    </div>
-                  ) : null}
-                  {getRouteLabel(selectedFlightDisplay) ? (
-                    <div className="col-span-2 min-w-0">
-                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Route
-                      </dt>
-                      <dd className="truncate font-medium tabular-nums">
-                        {getRouteLabel(selectedFlightDisplay)}
-                      </dd>
-                    </div>
-                  ) : null}
-                  {normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner) &&
-                  normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner) !==
-                    getOperatorLabel(selectedFlightDisplay) ? (
-                    <div className="col-span-2 min-w-0">
-                      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Owner
-                      </dt>
-                      <dd className="truncate font-medium">
-                        {normalizeRegisteredOwnerLabel(selectedFlightDisplay.registeredOwner)}
-                      </dd>
-                    </div>
-                  ) : null}
-                </dl>
-                <Separator className="my-2" />
-                <dl className="grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Distance
-                    </dt>
-                    <dd className="font-medium tabular-nums">
-                      {formatDistanceMiles(
-                        getDistanceFromHomeBaseMiles(selectedFlightDisplay, homeBase)
-                      )}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Altitude
-                    </dt>
-                    <dd className="flex items-baseline gap-1 font-medium tabular-nums">
-                      {formatAltitude(
-                        selectedFlightDisplay.altitudeFeet,
-                        activeSelectedFlightDetails?.status
-                      )}
-                      {altitudeTrend ? (
-                        <span
-                          aria-hidden="true"
-                          className={cn(
-                            "text-[10px]",
-                            altitudeTrend === "up" ? "text-emerald-500" : "text-red-500"
-                          )}
-                        >
-                          {altitudeTrend === "up" ? "↑" : "↓"}
-                        </span>
-                      ) : null}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Airspeed
-                    </dt>
-                    <dd className="flex items-baseline gap-1 font-medium tabular-nums">
-                      {formatAirspeed(selectedFlightDisplay.groundspeedKnots)}
-                      {airspeedTrend ? (
-                        <span
-                          aria-hidden="true"
-                          className={cn(
-                            "text-[10px]",
-                            airspeedTrend === "up" ? "text-emerald-500" : "text-red-500"
-                          )}
-                        >
-                          {airspeedTrend === "up" ? "↑" : "↓"}
-                        </span>
-                      ) : null}
-                    </dd>
-                  </div>
-                </dl>
-              </CardContent>
-            </Card>
+            <SelectedFlightCard
+              flight={selectedFlightDisplay}
+              details={activeSelectedFlightDetails}
+              homeBase={homeBase}
+              altitudeTrend={altitudeTrend}
+              airspeedTrend={airspeedTrend}
+            />
           ) : null}
-
-          <ScrollArea className="flex-1 px-1">
-            <div className="flex flex-col gap-1 pb-2">
-              {displayFlights.map((flight) => {
-                const isSelected = flight.id === selectedFlightDisplay?.id;
-                const isStripHovered = flight.id === hoveredStripFlightId;
-                const rankChange = stripRankChanges[flight.id];
-                return (
-                  <button
-                    className={cn(
-                      "group flex flex-col gap-1.5 rounded-md border px-2.5 py-2 text-left transition-colors",
-                      "border-sidebar-border bg-sidebar/40 hover:bg-sidebar-accent/60",
-                      isSelected &&
-                        "border-sidebar-primary bg-sidebar-accent text-sidebar-accent-foreground",
-                      isStripHovered && !isSelected && "border-sidebar-primary/40"
-                    )}
-                    key={flight.id}
-                    onBlur={() => handleStripHoverEnd(flight.id)}
-                    onClick={() => setSelectedFlightId(flight.id)}
-                    onFocus={() => handleStripHoverStart(flight.id)}
-                    onMouseEnter={() => handleStripHoverStart(flight.id)}
-                    onMouseLeave={() => handleStripHoverEnd(flight.id)}
-                    ref={(node) => {
-                      if (node) {
-                        stripElementRefs.current.set(flight.id, node);
-                      } else {
-                        stripElementRefs.current.delete(flight.id);
-                      }
-                    }}
-                    type="button"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <strong className="truncate text-sm font-semibold tabular-nums">
-                        {getPrimaryIdentifier(flight)}
-                      </strong>
-                      <span className="flex items-center gap-1.5">
-                        {rankChange ? (
-                          <span
-                            aria-label={rankChange > 0 ? "Moved closer" : "Moved farther"}
-                            className={cn(
-                              "text-[10px] font-medium",
-                              rankChange > 0 ? "text-emerald-500" : "text-muted-foreground"
-                            )}
-                            title={rankChange > 0 ? "Moved closer" : "Moved farther"}
-                          >
-                            {rankChange > 0 ? "↑" : "↓"}
-                          </span>
-                        ) : null}
-                        <Badge
-                          variant="outline"
-                          className="px-1.5 py-0 text-[9px] font-normal tabular-nums"
-                        >
-                          {flight.aircraftType ?? "UNK"}
-                        </Badge>
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-[11px]">
-                      <span className="flex min-w-0 flex-col">
-                        <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
-                          Operator
-                        </small>
-                        <strong className="truncate font-medium">
-                          {getListSecondaryLeft(flight)}
-                        </strong>
-                      </span>
-                      <span className="flex min-w-0 flex-col">
-                        <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
-                          Route
-                        </small>
-                        <strong className="truncate font-medium tabular-nums">
-                          {getStripRouteLabel(flight)}
-                        </strong>
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </ScrollArea>
+          <FlightList
+            flights={displayFlights}
+            selectedFlightId={selectedFlightDisplay?.id ?? null}
+            hoveredStripFlightId={hoveredStripFlightId}
+            stripRankChanges={stripRankChanges}
+            onSelectFlight={setSelectedFlightId}
+            onHoverStart={handleStripHoverStart}
+            onHoverEnd={handleStripHoverEnd}
+            registerStripRef={(id, node) => {
+              if (node) stripElementRefs.current.set(id, node);
+              else stripElementRefs.current.delete(id);
+            }}
+          />
         </SidebarContent>
 
         <SidebarFooter className="gap-2 px-3 py-2">
-          <Popover open={areaFlyoutOpen} onOpenChange={setAreaFlyoutOpen}>
-            <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="w-full justify-between">
-                <span className="text-xs text-muted-foreground">Area</span>
-                <strong className="text-xs tabular-nums">{radiusMiles} mi</strong>
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent side="top" align="start" className="w-72">
-              <div className="grid gap-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="grid gap-1">
-                    <Label htmlFor="area-lat" className="text-[10px] uppercase tracking-wider">
-                      Latitude
-                    </Label>
-                    <Input
-                      className="h-8 tabular-nums"
-                      id="area-lat"
-                      onChange={(event) =>
-                        setAreaDraft((currentDraft) => ({
-                          ...currentDraft,
-                          latitude: event.target.value
-                        }))
-                      }
-                      type="text"
-                      value={areaDraft.latitude}
-                    />
-                  </div>
-                  <div className="grid gap-1">
-                    <Label htmlFor="area-lon" className="text-[10px] uppercase tracking-wider">
-                      Longitude
-                    </Label>
-                    <Input
-                      className="h-8 tabular-nums"
-                      id="area-lon"
-                      onChange={(event) =>
-                        setAreaDraft((currentDraft) => ({
-                          ...currentDraft,
-                          longitude: event.target.value
-                        }))
-                      }
-                      type="text"
-                      value={areaDraft.longitude}
-                    />
-                  </div>
-                </div>
-                <div className="grid gap-1">
-                  <Label htmlFor="area-rad" className="text-[10px] uppercase tracking-wider">
-                    Radius (miles)
-                  </Label>
-                  <Input
-                    className="h-8 tabular-nums"
-                    id="area-rad"
-                    onChange={(event) =>
-                      setAreaDraft((currentDraft) => ({
-                        ...currentDraft,
-                        radiusMiles: event.target.value
-                      }))
-                    }
-                    type="text"
-                    value={areaDraft.radiusMiles}
-                  />
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  <Button onClick={setDraftFromMapCenter} size="sm" type="button" variant="outline">
-                    Use map center
-                  </Button>
-                  <Button onClick={useCurrentLocation} size="sm" type="button" variant="outline">
-                    {isLocating ? "Locating..." : "My location"}
-                  </Button>
-                  <Button className="ml-auto" onClick={applyAreaDraft} size="sm" type="button">
-                    Apply
-                  </Button>
-                </div>
-                {areaError ? <p className="text-xs text-destructive">{areaError}</p> : null}
-              </div>
-            </PopoverContent>
-          </Popover>
-          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-            <span className="uppercase tracking-wider">Source</span>
-            <span className="truncate tabular-nums">{dataSource}</span>
-          </div>
+          <AreaConfigPopover
+            open={areaFlyoutOpen}
+            onOpenChange={setAreaFlyoutOpen}
+            radiusMiles={radiusMiles}
+            areaDraft={areaDraft}
+            areaError={areaError}
+            isLocating={isLocating}
+            onDraftChange={setAreaDraft}
+            onUseMapCenter={setDraftFromMapCenter}
+            onUseLocation={useCurrentLocation}
+            onApply={applyAreaDraft}
+          />
+          <SourceStatusFooter dataSource={dataSource} />
         </SidebarFooter>
       </Sidebar>
 
-      {hoveredFlightDisplay && hoveredFlight ? (
-        <div
-          className="pointer-events-none fixed z-20 rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs shadow-md"
-          style={{
-            left: hoveredFlight.left,
-            top: hoveredFlight.top,
-            transform: "translate(8px, 8px)"
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <strong className="tabular-nums">{getPrimaryIdentifier(hoveredFlightDisplay)}</strong>
-            {hoveredFlightDisplay.aircraftType ? (
-              <Badge
-                variant="outline"
-                className="px-1 py-0 text-[9px] font-normal tabular-nums"
-              >
-                {hoveredFlightDisplay.aircraftType}
-              </Badge>
-            ) : null}
-          </div>
-          <span className="text-muted-foreground">{getHoverSubtitle(hoveredFlightDisplay)}</span>
-        </div>
-      ) : null}
+      <MapHoverCard hoveredFlight={hoveredFlight} hoveredFlightDisplay={hoveredFlightDisplay} />
       <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
     </>
   );
