@@ -48,7 +48,7 @@ export function SelectedFlightCard({
   airspeedTrend
 }: SelectedFlightCardProps) {
   return (
-    <Card className="mx-1 mt-2 mb-2 gap-3 py-3">
+    <Card className="mx-1 mt-2 mb-2 shrink-0 gap-3 py-3">
       <CardHeader className="gap-1 px-3">
         <CardDescription className="text-[10px] uppercase tracking-wider">
           {getIdentifierLabel(flight)}

@@ -26,8 +26,10 @@ function Slider({
   return (
     <SliderPrimitive.Root
       data-slot="slider"
-      defaultValue={defaultValue}
-      value={value}
+      // Conditional spreads keep these off the element when undefined so the
+      // wrapper stays compatible with tsconfig's exactOptionalPropertyTypes.
+      {...(defaultValue !== undefined ? { defaultValue } : {})}
+      {...(value !== undefined ? { value } : {})}
       min={min}
       max={max}
       className={cn(

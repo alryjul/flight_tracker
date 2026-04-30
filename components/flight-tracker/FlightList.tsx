@@ -26,7 +26,7 @@ export function FlightList({
   registerStripRef
 }: FlightListProps) {
   return (
-    <ScrollArea className="flex-1 px-1">
+    <ScrollArea className="min-h-0 flex-1 px-1">
       <div className="flex flex-col gap-1 pb-2">
         {flights.map((flight) => {
           const isSelected = flight.id === selectedFlightId;

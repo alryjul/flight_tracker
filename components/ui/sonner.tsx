@@ -6,10 +6,14 @@ import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
+  // Narrow next-themes' arbitrary string to sonner's enum so the prop is never
+  // `undefined` (required by tsconfig's exactOptionalPropertyTypes).
+  const sonnerTheme: "light" | "dark" | "system" =
+    theme === "light" || theme === "dark" ? theme : "system"
 
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme={sonnerTheme}
       className="toaster group"
       icons={{
         success: (

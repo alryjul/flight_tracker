@@ -778,8 +778,8 @@ export function MapCanvas({
   }, [activeSelectedFlightDetails, mapReady, selectedFlightId]);
 
   return (
-    <div className="fixed inset-0 z-0">
+    <main aria-label="Live air-traffic map" className="fixed inset-0 z-0">
       <div className="h-full w-full" ref={containerRef} />
-    </div>
+    </main>
   );
 }

@@ -1302,7 +1302,7 @@ export function FlightMap() {
           ) : null}
         </SidebarHeader>
 
-        <SidebarContent className="gap-0 px-2">
+        <SidebarContent className="gap-0 overflow-hidden px-2">
           {selectedFlightDisplay ? (
             <SelectedFlightCard
               flight={selectedFlightDisplay}
