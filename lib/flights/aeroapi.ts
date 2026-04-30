@@ -4,6 +4,7 @@ import {
 } from "@/lib/flights/reverseGeocode";
 import { getDiscoveryScore, isCommercialCallsignString } from "@/lib/flights/scoring";
 import { isUnlikelyToHaveAeroApiData } from "@/lib/flights/squawk";
+import { resolveAirlineName } from "@/lib/flights/airlines";
 import type { Flight } from "@/lib/flights/types";
 
 const AEROAPI_BASE_URL = "https://aeroapi.flightaware.com/aeroapi";
@@ -828,7 +829,15 @@ async function fetchAeroApiFeedMetadata(flight: Flight): Promise<AeroApiFeedMeta
 
     const metadata: AeroApiFeedMetadata = {
       aircraftType: null,
-      airline: normalizeOperatorDisplayName(bestMatch.operator) ?? flight.airline,
+      // Why: AeroAPI's `operator` is typically the ICAO 3-letter code
+      // ("SKW", "QXE"). Resolve via static lookup before storing — keeps
+      // the user-facing airline a readable name. Fall back to whatever
+      // upstream had (often the readable name from ADSBdb's flightroute)
+      // before settling for the bare code.
+      airline:
+        resolveAirlineName(bestMatch.operator) ??
+        flight.airline ??
+        normalizeOperatorDisplayName(bestMatch.operator),
       destination,
       flightNumber: getPreferredFlightNumber(bestMatch),
       origin,
@@ -1207,7 +1216,12 @@ export async function fetchAeroApiSelectedFlightDetails(
         resolveAirportOrLocationLabel(currentBestMatch.origin),
         resolveAirportOrLocationLabel(currentBestMatch.destination)
       ]);
+      // Why: prefer the static ICAO→name table — short-circuits the
+      // AeroAPI /operators/{code} call result and the bare operator-code
+      // fallback. operatorName from the API stays as the last-resort
+      // since it covers airlines our table doesn't.
       const normalizedOperatorName =
+        resolveAirlineName(currentBestMatch.operator) ??
         normalizeOperatorDisplayName(operatorName) ??
         normalizeOperatorDisplayName(currentBestMatch.operator);
 

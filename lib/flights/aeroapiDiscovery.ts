@@ -1,5 +1,6 @@
 import { distanceBetweenPointsMiles, milesToLatitudeDelta, milesToLongitudeDelta } from "@/lib/geo";
 import { getDiscoveryScore } from "@/lib/flights/scoring";
+import { resolveAirlineName } from "@/lib/flights/airlines";
 import type { Flight } from "@/lib/flights/types";
 
 const AEROAPI_BASE_URL = "https://aeroapi.flightaware.com/aeroapi";
@@ -122,7 +123,14 @@ function normalizeFlight(input: AeroApiDiscoveryFlight): Flight | null {
     callsign: getCallsign(input),
     onGround: null,
     flightNumber: input.ident_iata ?? null,
-    airline: input.operator ?? input.operator_iata ?? null,
+    // Why: AeroAPI returns operator codes; resolve to readable names so
+    // the strip card shows "Southwest Airlines" not "SWA".
+    airline:
+      resolveAirlineName(input.operator) ??
+      resolveAirlineName(input.operator_iata) ??
+      input.operator ??
+      input.operator_iata ??
+      null,
     aircraftType: input.aircraft_type ?? null,
     origin: normalizeAirportCode(input.origin),
     destination: normalizeAirportCode(input.destination),

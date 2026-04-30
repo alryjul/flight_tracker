@@ -4,6 +4,7 @@ import {
   isStationaryOnGroundFlight
 } from "@/lib/flights/aeroapi";
 import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
+import { deriveAirlineNameFromCallsign } from "@/lib/flights/airlines";
 import type { FlightArea } from "@/lib/flights/opensky";
 import { getDiscoveryScore } from "@/lib/flights/scoring";
 import { inferOriginFromTrack } from "@/lib/flights/trackInference";
@@ -527,14 +528,19 @@ function adsbLolAircraftToFlight(
       ? Math.round((responseNowMs - aircraft.seen * 1000) / 1000)
       : positionTimestampSec;
 
+  const callsign = normalizeCallsign(aircraft.flight);
   return {
     id: aircraft.hex.trim().toLowerCase(),
     latitude: aircraft.lat,
     longitude: aircraft.lon,
-    callsign: normalizeCallsign(aircraft.flight),
+    callsign,
     onGround: onGround ? true : altitudeFeet == null ? null : false,
     flightNumber: null,
-    airline: null,
+    // Why: derive a readable airline name from the callsign prefix (SWA1234 → Southwest)
+    // immediately so the strip shows real text on the very first poll, before
+    // any ADSBdb/AeroAPI enrichment lands. Returns null for N-numbers and
+    // unrecognized prefixes; downstream enrichment overwrites if it has better data.
+    airline: deriveAirlineNameFromCallsign(callsign),
     aircraftType: aircraft.t?.trim() || null,
     origin: null,
     destination: null,

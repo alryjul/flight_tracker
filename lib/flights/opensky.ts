@@ -1,6 +1,7 @@
 import { APP_CONFIG } from "@/lib/config";
 import { enrichFlightsWithTrackInferredOrigin } from "@/lib/flights/adsblol";
 import { enrichFlightsWithAdsbdbFallback } from "@/lib/flights/adsbdb";
+import { deriveAirlineNameFromCallsign } from "@/lib/flights/airlines";
 import {
   enrichFlightsWithAeroApiMetadata,
   isStationaryOnGroundFlight
@@ -177,23 +178,7 @@ export async function fetchOpenSkyFlights(
   });
 }
 
-function deriveAirlineFromCallsign(callsign: string | null) {
-  const prefix = callsign?.trim().slice(0, 3).toUpperCase();
-
-  switch (prefix) {
-    case "AAL":
-      return "American Airlines";
-    case "DAL":
-      return "Delta Air Lines";
-    case "SWA":
-      return "Southwest";
-    case "UAL":
-      return "United Airlines";
-    case "ASA":
-      return "Alaska Airlines";
-    case "JBU":
-      return "JetBlue";
-    default:
-      return null;
-  }
-}
+// Why: previously a 6-entry switch covering only the busiest US carriers.
+// Replaced with the shared static lookup in lib/flights/airlines.ts so all
+// providers resolve the same set of operators consistently.
+const deriveAirlineFromCallsign = deriveAirlineNameFromCallsign;
