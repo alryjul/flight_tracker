@@ -143,18 +143,18 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 
           <Separator className="bg-border/60" />
 
-          {/* Aircraft + operator stack */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Aircraft type badge inline with the supporting info dl.
+              The badge alone shows the short name (737-800); full
+              manufacturer name lives in the badge's title attribute
+              on hover. SelectedFlightCard uses the same pattern —
+              one badge, tooltip-for-detail, no repetition in the
+              body. */}
+          <div className="flex items-start gap-3">
             <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
-            <p className={cn("truncate text-xs text-muted-foreground", VALUE_LEADING)}>
-              {getAircraftTypeFull(flight.aircraftType)}
-            </p>
+            <div className="min-w-0 flex-1">
+              <InfoStack flight={flight} />
+            </div>
           </div>
-
-          {/* Operator / Registration / Owner — same dl pattern as the
-              SelectedFlightCard, but smaller and muted to keep the
-              hero rows above as the focus. */}
-          <InfoStack flight={flight} />
 
           <Separator className="bg-border/60" />
 
@@ -349,24 +349,25 @@ function isShortAirportCode(value: string | null): value is string {
   return value != null && value.length > 0 && value.length <= 4;
 }
 
-function getAircraftTypeFull(aircraftType: string | null): string {
-  const resolved = resolveAircraftType(aircraftType);
-  if (resolved) return resolved.full;
-  return aircraftType?.trim().toUpperCase() ?? "Unknown type";
-}
-
 // Why: ambient-sized aircraft type badge — strips the Tooltip wrapper
-// from SelectedFlightCard's version since the user is glancing here,
-// not hovering. Just icon + short name, theme-aware via Badge variant.
+// from SelectedFlightCard's version (overkill for an at-a-glance
+// surface) but keeps the manufacturer-prefixed full name available
+// via a native title attribute. So the badge shows "737-800" and
+// hovering reveals "Boeing 737-800" — same info access, less DOM.
 function AmbientAircraftTypeBadge({
   aircraftType
 }: {
   aircraftType: string | null;
 }) {
+  const resolved = resolveAircraftType(aircraftType);
   const label = getAircraftTypeBadgeLabel(aircraftType);
   const Icon = isHelicopterType(aircraftType) ? Helicopter : Plane;
   return (
-    <Badge variant="secondary" className="text-xs">
+    <Badge
+      variant="secondary"
+      className="text-xs"
+      title={resolved?.full ?? label}
+    >
       <Icon aria-hidden="true" />
       {label}
     </Badge>
