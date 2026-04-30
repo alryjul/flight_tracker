@@ -243,17 +243,19 @@ export function getStripRouteLabel(flight: Flight) {
 }
 
 // Why: format an ISO 8601 timestamp into a short time-and-zone string
-// ("3:45 PM PT"). When a timezone is provided, the time is rendered
-// in THAT zone (boarding-pass behavior — BUR departure shows in PT
-// even if the viewer is in NYC), with the zone's short name appended
-// for clarity. Without a timezone, falls back to the viewer's local
+// ("15:45 PT"). When a timezone is provided, the time is rendered in
+// THAT zone (boarding-pass behavior — BUR departure shows in PT even
+// if the viewer is in NYC), with the zone's short name appended for
+// clarity. Without a timezone, falls back to the viewer's local
 // timezone with no zone label (we can't honestly stamp the viewer's
 // zone onto a time we know belongs to a specific airport).
 //
-// Uses Intl.DateTimeFormat with timeZoneName: 'shortGeneric' which
+// Uses 24-hour clock (hour12: false) to match aviation convention and
+// avoid the AM/PM suffix — saves ~3 chars per time, which matters in
+// the tight column under FROM/TO. timeZoneName: 'shortGeneric'
 // returns DST-agnostic abbreviations ("PT" not "PDT"/"PST", "ET" not
-// "EDT"/"EST"). Friendlier for an at-a-glance UI; the precise DST
-// state isn't usually what the user is asking.
+// "EDT"/"EST"); the precise DST state isn't usually what the user is
+// asking.
 export function formatScheduleTime(
   iso: string | null | undefined,
   timezone?: string | null
@@ -263,8 +265,9 @@ export function formatScheduleTime(
   if (Number.isNaN(date.valueOf())) return null;
 
   const options: Intl.DateTimeFormatOptions = {
-    hour: "numeric",
-    minute: "2-digit"
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
   };
 
   if (timezone) {
