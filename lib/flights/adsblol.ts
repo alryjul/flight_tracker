@@ -189,7 +189,10 @@ function isolateCurrentLeg(trace: AdsbLolTracePoint[]): AdsbLolTracePoint[] {
           // Gap ended while still on the ground (cold-start, pre-takeoff
           // taxi, etc.). Defer the leg-start marker until takeoff. Remember
           // this index so we can fall back to it at end-of-loop if takeoff
-          // never happens within the trace window.
+          // never happens within the trace window. If two consecutive
+          // long gaps both end stationary (rare: parked → brief signal →
+          // parked again), the most recent gap-end is the right new-leg
+          // boundary, so overwriting pendingLegBreakIdx is intentional.
           pendingLegBreak = true;
           pendingLegBreakIdx = i;
           stationaryStartIdx = null;
