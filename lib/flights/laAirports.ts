@@ -277,6 +277,19 @@ export const KNOWN_AIRPORTS: Airport[] = [
     longitude: -118.2416
   },
   {
+    // Note: airnav lists this with a Pacoima street address (12605
+    // Osborne St) but the FAA airport reference point sits ~25 miles
+    // west, near the Calabasas / Westlake Village area. We use the
+    // FAA-listed ARP since that's what AeroAPI matches against; if
+    // the actual helicopter physical location differs, the code-
+    // override path still resolves the display string correctly.
+    icao: "LACOFD-1",
+    iata: "LA County Fire Heliport",
+    name: "Los Angeles County Fire Department Heliport",
+    latitude: 34.0836,
+    longitude: -118.8632
+  },
+  {
     icao: "LAC-USC",
     iata: "LAC+USC Medical Center",
     name: "Los Angeles County / USC Medical Center Heliport",
@@ -321,6 +334,9 @@ export const AIRPORT_CODE_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = 
 
   // ── LAFD / city government ──
   "59L": "LAFD City Hall East Heliport", // LA City Hall East rooftop, operated by LAFD
+
+  // ── LA County Fire ──
+  "1CA9": "LA County Fire Heliport", // FAA ARP differs from listed address; code-override is authoritative
 
   // ── Public hospitals (county/municipal) ──
   "35CA": "LAC+USC Medical Center" // LA County / USC Medical Center
