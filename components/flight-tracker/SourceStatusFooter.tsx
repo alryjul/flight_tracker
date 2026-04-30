@@ -1,10 +1,12 @@
 "use client";
 
+import { memo } from "react";
+
 type SourceStatusFooterProps = {
   dataSource: string;
 };
 
-export function SourceStatusFooter({ dataSource }: SourceStatusFooterProps) {
+function SourceStatusFooterImpl({ dataSource }: SourceStatusFooterProps) {
   return (
     <div className="flex items-center justify-between text-[10px] text-muted-foreground">
       <span className="uppercase tracking-wider">Source</span>
@@ -12,3 +14,5 @@ export function SourceStatusFooter({ dataSource }: SourceStatusFooterProps) {
     </div>
   );
 }
+
+export const SourceStatusFooter = memo(SourceStatusFooterImpl);

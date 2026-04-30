@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { getHoverSubtitle, getPrimaryIdentifier } from "@/lib/flights/display";
 import type { Flight } from "@/lib/flights/types";
@@ -10,7 +11,7 @@ type MapHoverCardProps = {
   hoveredFlightDisplay: Flight | null;
 };
 
-export function MapHoverCard({ hoveredFlight, hoveredFlightDisplay }: MapHoverCardProps) {
+function MapHoverCardImpl({ hoveredFlight, hoveredFlightDisplay }: MapHoverCardProps) {
   if (!hoveredFlight || !hoveredFlightDisplay) return null;
   return (
     <div
@@ -36,3 +37,8 @@ export function MapHoverCard({ hoveredFlight, hoveredFlightDisplay }: MapHoverCa
     </div>
   );
 }
+
+// Why: hoveredFlight changes only on map mouse moves (rare); the orchestrator
+// re-renders on every poll. Default shallow compare skips the render when
+// neither hoveredFlight nor hoveredFlightDisplay changed identity.
+export const MapHoverCard = memo(MapHoverCardImpl);

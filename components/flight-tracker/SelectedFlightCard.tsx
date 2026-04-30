@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -40,7 +41,7 @@ type SelectedFlightCardProps = {
   airspeedTrend: TrendDirection;
 };
 
-export function SelectedFlightCard({
+function SelectedFlightCardImpl({
   flight,
   details,
   homeBase,
@@ -178,3 +179,36 @@ export function SelectedFlightCard({
     </Card>
   );
 }
+
+// Why: same story as MapCanvas + the list strips. The card only needs to
+// re-render when the selected flight, its detail enrichment, or the trend
+// signals change — not on every poll cycle. Like FlightListItem, the merge
+// pipeline can produce fresh flight objects with the same data, so use a
+// custom comparator on the display-relevant flight fields.
+export const SelectedFlightCard = memo(SelectedFlightCardImpl, (prev, next) => {
+  if (
+    prev.details !== next.details ||
+    prev.altitudeTrend !== next.altitudeTrend ||
+    prev.airspeedTrend !== next.airspeedTrend ||
+    prev.homeBase !== next.homeBase
+  ) {
+    return false;
+  }
+  const a = prev.flight;
+  const b = next.flight;
+  return (
+    a.id === b.id &&
+    a.flightNumber === b.flightNumber &&
+    a.registration === b.registration &&
+    a.callsign === b.callsign &&
+    a.aircraftType === b.aircraftType &&
+    a.airline === b.airline &&
+    a.registeredOwner === b.registeredOwner &&
+    a.origin === b.origin &&
+    a.destination === b.destination &&
+    a.altitudeFeet === b.altitudeFeet &&
+    a.groundspeedKnots === b.groundspeedKnots &&
+    a.latitude === b.latitude &&
+    a.longitude === b.longitude
+  );
+});
