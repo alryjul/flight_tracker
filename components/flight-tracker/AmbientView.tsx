@@ -42,7 +42,7 @@ import {
   getDistanceFromHomeBaseMiles
 } from "@/lib/map/geo-helpers";
 import type { Flight } from "@/lib/flights/types";
-import type { HomeBaseCenter } from "@/lib/types/flight-map";
+import type { HomeBaseCenter, TrendDirection } from "@/lib/types/flight-map";
 import { cn } from "@/lib/utils";
 
 // Why: dt label styling — uppercase + tracking-wider, muted color via
@@ -89,9 +89,17 @@ type AmbientViewProps = {
   flight: Flight | null;
   isSelected: boolean;
   homeBase: HomeBaseCenter;
+  altitudeTrend: TrendDirection;
+  airspeedTrend: TrendDirection;
 };
 
-export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) {
+export function AmbientView({
+  flight,
+  isSelected,
+  homeBase,
+  altitudeTrend,
+  airspeedTrend
+}: AmbientViewProps) {
   const distanceMiles = flight
     ? getDistanceFromHomeBaseMiles(flight, homeBase)
     : null;
@@ -141,13 +149,21 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 
           <Separator className="bg-border/60" />
 
-          {/* Stats row — Distance / Altitude / Airspeed */}
+          {/* Stats row — Distance / Altitude / Airspeed.
+              Altitude + airspeed include trend arrows when the
+              snapshot history shows movement past the metric
+              thresholds. Same pattern (and same green/amber colors)
+              as SelectedFlightCard's metrics row. */}
           <dl className="grid grid-cols-3 gap-3 text-xs">
             <Stat label="Distance">
               {distanceMiles != null ? formatDistanceMiles(distanceMiles) : "—"}
             </Stat>
-            <Stat label="Altitude">{formatAltitude(flight.altitudeFeet)}</Stat>
-            <Stat label="Airspeed">{formatAirspeed(flight.groundspeedKnots)}</Stat>
+            <Stat label="Altitude" trend={altitudeTrend}>
+              {formatAltitude(flight.altitudeFeet)}
+            </Stat>
+            <Stat label="Airspeed" trend={airspeedTrend}>
+              {formatAirspeed(flight.groundspeedKnots)}
+            </Stat>
           </dl>
         </>
       ) : (
@@ -448,18 +464,40 @@ function InfoStack({ flight }: { flight: Flight }) {
 }
 
 // Why: stat cell — label + value column, used in the bottom 3-col
-// metrics row.
+// metrics row. Optional trend prop renders an up/down arrow next to
+// the value (green for up, amber for down) — same pattern and colors
+// as SelectedFlightCard's altitude/airspeed cells.
 function Stat({
   label,
-  children
+  children,
+  trend
 }: {
   label: string;
   children: React.ReactNode;
+  trend?: TrendDirection;
 }) {
   return (
     <div className="flex flex-col gap-1">
       <dt className={LABEL_CLASS}>{label}</dt>
-      <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>{children}</dd>
+      <dd
+        className={cn(
+          "flex items-baseline gap-1 font-medium tabular-nums",
+          VALUE_LEADING
+        )}
+      >
+        {children}
+        {trend ? (
+          <span
+            aria-hidden="true"
+            className={cn(
+              "text-[10px]",
+              trend === "up" ? "text-emerald-500" : "text-amber-500"
+            )}
+          >
+            {trend === "up" ? "↑" : "↓"}
+          </span>
+        ) : null}
+      </dd>
     </div>
   );
 }

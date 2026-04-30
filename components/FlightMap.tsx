@@ -1187,6 +1187,34 @@ export function FlightMap() {
     ambientFlight != null &&
     ambientFlight.id === selectedFlightId;
 
+  // Why: trend arrows (↑/↓) for altitude and airspeed are computed
+  // from the snapshot history for whichever flight is being shown.
+  // The existing altitude/airspeedTrend above are scoped to the
+  // selected flight; we compute a separate pair for the ambient
+  // flight here so trends still render when ambient is auto-tracking
+  // the nearest aircraft (no selection). When ambientFlight ===
+  // selected, both pairs converge on the same values.
+  const ambientAltitudeTrend = ambientFlight
+    ? getMetricTrend(
+        getFlightMetricHistory(
+          snapshotHistoryRef.current,
+          ambientFlight,
+          (f) => f.altitudeFeet
+        ),
+        ALTITUDE_TREND_THRESHOLD_FEET
+      )
+    : null;
+  const ambientAirspeedTrend = ambientFlight
+    ? getMetricTrend(
+        getFlightMetricHistory(
+          snapshotHistoryRef.current,
+          ambientFlight,
+          (f) => f.groundspeedKnots
+        ),
+        AIRSPEED_TREND_THRESHOLD_KNOTS
+      )
+    : null;
+
   // Why: stable callback for the map background-click handler in
   // MapCanvas. Wrapping in useCallback keeps MapCanvas's effect deps
   // happy and avoids re-registering the click listener on every
@@ -1410,6 +1438,8 @@ export function FlightMap() {
           flight={ambientFlight}
           isSelected={ambientFlightIsSelected}
           homeBase={homeBase}
+          altitudeTrend={ambientAltitudeTrend}
+          airspeedTrend={ambientAirspeedTrend}
         />
       ) : null}
 
