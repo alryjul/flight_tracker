@@ -11,14 +11,20 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from "@/components/ui/tooltip";
+import {
   formatAirspeed,
   formatAltitude,
   getIdentifierLabel,
   getOperatorLabel,
   getOperatorLabelTitle,
   getPrimaryIdentifier,
+  getRadiotelephonyCall,
   getRouteLabel,
-  getSecondaryIdentifier,
   normalizeRegisteredOwnerLabel
 } from "@/lib/flights/display";
 import type { Flight } from "@/lib/flights/types";
@@ -41,6 +47,62 @@ type SelectedFlightCardProps = {
   airspeedTrend: TrendDirection;
 };
 
+// Why: the card title shows the IATA flight number ("WN1184") because
+// it's what passengers see on boarding passes — the friendly hero
+// signifier. The ICAO callsign ("SWA1184") and spoken radio call
+// ("Southwest 1184") used to live in a small line under the title;
+// that was visual noise on the common case where they're identical
+// (charter ops, GA flights) and not particularly useful info on the
+// hover-curious commercial case. Move them into a tooltip on the
+// title — discoverable for the curious, invisible for everyone else.
+//
+// Skip rendering the tooltip when there's nothing additive to say
+// (no distinct callsign, no resolvable airline operator) — falling
+// back to plain title text rather than an empty hover target.
+function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
+  const primary = getPrimaryIdentifier(flight);
+  const radioCall = getRadiotelephonyCall(flight);
+  const callsignDiffersFromPrimary =
+    flight.callsign && flight.callsign !== primary;
+
+  if (!callsignDiffersFromPrimary && !radioCall) {
+    return (
+      <CardTitle className="text-lg leading-tight tabular-nums">
+        {primary}
+      </CardTitle>
+    );
+  }
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* Why: dotted underline as the visual affordance for "this
+              has more info on hover". Keeps the title clean while
+              hinting at interactivity. cursor-help reinforces it. */}
+          <CardTitle className="cursor-help text-lg leading-tight tabular-nums underline decoration-muted-foreground/40 decoration-dotted underline-offset-4">
+            {primary}
+          </CardTitle>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start" className="flex flex-col gap-0.5">
+          {callsignDiffersFromPrimary ? (
+            <span className="tabular-nums">
+              <span className="text-background/70">ATC </span>
+              {flight.callsign}
+            </span>
+          ) : null}
+          {radioCall ? (
+            <span>
+              <span className="text-background/70">Radio </span>
+              &ldquo;{radioCall}&rdquo;
+            </span>
+          ) : null}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function SelectedFlightCardImpl({
   flight,
   details,
@@ -61,14 +123,7 @@ function SelectedFlightCardImpl({
             <CardDescription className="text-[10px] uppercase tracking-wider">
               {getIdentifierLabel(flight)}
             </CardDescription>
-            <CardTitle className="text-lg leading-tight tabular-nums">
-              {getPrimaryIdentifier(flight)}
-            </CardTitle>
-            {getSecondaryIdentifier(flight) ? (
-              <p className="text-xs text-muted-foreground">
-                {getSecondaryIdentifier(flight)}
-              </p>
-            ) : null}
+            <FlightTitleWithRadioTooltip flight={flight} />
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-1">
             <Badge variant="secondary" className="text-[10px]">

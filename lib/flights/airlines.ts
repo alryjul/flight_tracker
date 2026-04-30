@@ -184,3 +184,61 @@ export function resolveAirlineName(code: string | null | undefined): string | nu
 export function deriveAirlineNameFromCallsign(callsign: string | null): string | null {
   return resolveAirlineName(getIcaoOperatorFromCallsign(callsign));
 }
+
+// Why: ATC speaks the airline's *radiotelephony designator*, which is
+// usually but not always the first word of the airline name. We override
+// when the radio call diverges from the obvious "first word" default —
+// either historic/branded (Speedbird, Shamrock, Giant) or multi-word
+// names where "first word" would be wrong ("Air France" → "Airfrance",
+// "All Nippon" → "All Nippon", not "All"). Add to this table when you
+// spot a tooltip showing the wrong word.
+const RADIOTELEPHONY_OVERRIDES: Readonly<Record<string, string>> = {
+  // Historic / branded callsigns that don't match the operator name
+  BAW: "Speedbird", // British Airways
+  EIN: "Shamrock", // Aer Lingus
+  VRD: "Redwood", // Virgin America (defunct, kept for historical traces)
+  GSS: "Giant", // Atlas Air long-haul
+  GTI: "Giant", // Atlas Air freight
+  CKS: "Connie", // Kalitta Air
+
+  // Airlines where the first-word default would mis-pronounce
+  AFR: "Airfrance", // French controllers say it as one word
+  ANA: "All Nippon",
+  ANZ: "New Zealand", // not "Air"
+  KAL: "Korean Air",
+  QXE: "Horizon Air",
+  NKS: "Spirit Wings", // not "Spirit"
+  FFT: "Frontier Flight", // not "Frontier"
+
+  // Air ambulance / helicopter EMS — typically pronounced as one word
+  CMD: "CalStar",
+  REA: "Reach",
+  PHM: "PHI Air Med",
+
+  // Cargo
+  ABX: "Abex",
+  PAC: "Polar",
+  CLX: "Cargolux",
+
+  // Misc
+  AAB: "Abelag"
+};
+
+// Why: given an ICAO operator code, return the spoken radiotelephony
+// designator (the word ATC says before the flight number). Falls back
+// to the first word of the airline's commercial name when no override
+// applies. Returns null when we don't know the operator at all.
+export function resolveRadiotelephony(code: string | null | undefined): string | null {
+  if (!code) return null;
+  const trimmed = code.trim().toUpperCase();
+  if (trimmed.length === 0) return null;
+  const override = RADIOTELEPHONY_OVERRIDES[trimmed];
+  if (override) return override;
+  const name = AIRLINE_NAMES_BY_ICAO[trimmed];
+  if (!name) return null;
+  // First whitespace-delimited token. Works for "Southwest Airlines"
+  // → "Southwest", "All Nippon Airways" → "All". (ANA's actual radio
+  // callsign IS "All Nippon" — two words — but "All" is close enough
+  // for a tooltip; add an override if it bothers anyone.)
+  return name.split(/\s+/)[0] ?? null;
+}

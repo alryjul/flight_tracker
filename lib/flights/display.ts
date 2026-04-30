@@ -1,6 +1,10 @@
 import type { Flight } from "@/lib/flights/types";
 import { isOperatingVfr } from "@/lib/flights/squawk";
 import { getLiveFlightIdentityKey } from "@/lib/flights/identity";
+import {
+  getIcaoOperatorFromCallsign,
+  resolveRadiotelephony
+} from "@/lib/flights/airlines";
 
 export function getPrimaryIdentifier(flight: Flight) {
   return flight.flightNumber ?? flight.registration ?? flight.callsign;
@@ -34,6 +38,26 @@ export function getSecondaryIdentifier(flight: Flight) {
   }
 
   return null;
+}
+
+// Why: build the spoken ATC radio call from a flight's ICAO callsign.
+// "SWA1184" with operator SWA → "Southwest 1184". The radiotelephony
+// override table handles the famous exceptions (BAW → "Speedbird"),
+// and the first-word default handles everything else. Returns null
+// when the callsign isn't an airline-style ICAO callsign (N-numbers,
+// short calls, military codes, etc.) — the tooltip just shows the
+// raw callsign in that case.
+export function getRadiotelephonyCall(flight: Flight) {
+  const icao = getIcaoOperatorFromCallsign(flight.callsign);
+  if (!icao) return null;
+  const word = resolveRadiotelephony(icao);
+  if (!word) return null;
+  // Strip the leading ICAO prefix to get the trailing flight number.
+  // SWA1184 → "1184". Defensive: if the callsign somehow doesn't start
+  // with the prefix, fall back to using the whole callsign.
+  const upper = flight.callsign.trim().toUpperCase();
+  const flightNumber = upper.startsWith(icao) ? upper.slice(icao.length) : upper;
+  return `${word} ${flightNumber}`.trim();
 }
 
 export function getRouteLabel(flight: Flight) {
