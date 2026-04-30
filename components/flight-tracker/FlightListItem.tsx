@@ -74,7 +74,7 @@ function FlightListItemImpl({
       type="button"
     >
       <div className="flex items-center justify-between gap-2">
-        <strong className="truncate font-mono text-sm font-semibold tabular-nums">
+        <strong className="truncate text-sm font-semibold tabular-nums">
           {getPrimaryIdentifier(flight)}
         </strong>
         <span className="flex items-center gap-1.5">
@@ -95,7 +95,7 @@ function FlightListItemImpl({
             return (
               <Badge
                 variant="outline"
-                className="px-1.5 py-0 font-mono text-[9px] font-normal tabular-nums"
+                className="px-1.5 py-0 text-[9px] font-normal tabular-nums"
               >
                 <Icon aria-hidden="true" />
                 {getAircraftTypeBadgeLabel(flight.aircraftType)}
@@ -113,7 +113,7 @@ function FlightListItemImpl({
           <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
             {getOperatorLabelTitle(flight)}
           </small>
-          <strong className="truncate font-mono font-medium">
+          <strong className="truncate font-medium">
             {/* Why: when there's no real operator info (no airline, no
                 non-manufacturer owner), show an em-dash rather than echoing
                 the callsign that's already in the strip's title above. The
@@ -135,7 +135,7 @@ function FlightListItemImpl({
                 <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
                   {routeCell.label}
                 </small>
-                <strong className="truncate font-mono font-medium tabular-nums">
+                <strong className="truncate font-medium tabular-nums">
                   {routeCell.value}
                 </strong>
               </>

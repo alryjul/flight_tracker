@@ -69,14 +69,6 @@ type SelectedFlightCardProps = {
 const LABEL_CLASS =
   "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground";
 
-// Why: shared treatment for data values (everything that isn't a
-// label or prose). Geist Mono gives them a distinct "this is data"
-// texture that contrasts with Inter labels above each value. Applied
-// inline via cn() at each value site so Tailwind picks up the
-// font-mono utility without conflicting with per-element overrides
-// like truncate, font-medium, or specific text sizes.
-const VALUE_FONT = "font-mono";
-
 // Why: severity-to-visual mapping for the status badge. Lives at the
 // component layer (not display.ts) because it's a styling concern; the
 // classification rules in display.ts return a severity string and the
@@ -126,7 +118,7 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
 
   if (!callsignDiffersFromPrimary && !radioCall) {
     return (
-      <CardTitle className={cn("text-lg leading-tight tabular-nums", VALUE_FONT)}>
+      <CardTitle className="text-lg leading-tight tabular-nums">
         {primary}
       </CardTitle>
     );
@@ -139,12 +131,7 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
           {/* Why: dotted underline as the visual affordance for "this
               has more info on hover". Keeps the title clean while
               hinting at interactivity. cursor-help reinforces it. */}
-          <CardTitle
-            className={cn(
-              "cursor-help text-lg leading-tight tabular-nums underline decoration-muted-foreground/40 decoration-dotted underline-offset-4",
-              VALUE_FONT
-            )}
-          >
+          <CardTitle className="cursor-help text-lg leading-tight tabular-nums underline decoration-muted-foreground/40 decoration-dotted underline-offset-4">
             {primary}
           </CardTitle>
         </TooltipTrigger>
@@ -175,8 +162,7 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
 // render as plain text without a tooltip.
 const AIRPORT_VALUE_CLASS = cn(
   "truncate text-xs font-medium tabular-nums",
-  VALUE_LEADING,
-  VALUE_FONT
+  VALUE_LEADING
 );
 
 function AirportValue({ code }: { code: string }) {
@@ -219,12 +205,7 @@ function ScheduleTimeLine({
 }) {
   if (!display) return null;
   return (
-    <p
-      className={cn(
-        "truncate text-[10px] leading-tight tabular-nums text-muted-foreground",
-        VALUE_FONT
-      )}
-    >
+    <p className="truncate text-[10px] leading-tight tabular-nums text-muted-foreground">
       <span className="text-foreground/70">{display.label}</span>{" "}
       {display.time}
     </p>
@@ -322,7 +303,7 @@ function AircraftTypeBadge({
   // No mapping → raw ICAO already shown, no tooltip content to add.
   if (!resolved) {
     return (
-      <Badge variant="secondary" className={cn("text-[10px]", VALUE_FONT)}>
+      <Badge variant="secondary" className="text-[10px]">
         <Icon aria-hidden="true" />
         {label}
       </Badge>
@@ -335,7 +316,7 @@ function AircraftTypeBadge({
         <TooltipTrigger asChild>
           <Badge
             variant="secondary"
-            className={cn("cursor-help text-[10px]", VALUE_FONT)}
+            className="cursor-help text-[10px]"
             tabIndex={0}
           >
             <Icon aria-hidden="true" />
@@ -425,7 +406,7 @@ function SelectedFlightCardImpl({
             {meaningfulStatus && statusBadgeStyle ? (
               <Badge
                 variant={statusBadgeStyle.variant}
-                className={cn("text-[10px]", statusBadgeStyle.className, VALUE_FONT)}
+                className={cn("text-[10px]", statusBadgeStyle.className)}
               >
                 {meaningfulStatus}
               </Badge>
@@ -455,7 +436,7 @@ function SelectedFlightCardImpl({
               )}
             >
               <dt className={LABEL_CLASS}>{getOperatorLabelTitle(flight)}</dt>
-              <dd className={cn("truncate font-medium", VALUE_LEADING, VALUE_FONT)}>
+              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
                 {operatorLabel}
               </dd>
             </div>
@@ -471,8 +452,7 @@ function SelectedFlightCardImpl({
               <dd
                 className={cn(
                   "truncate font-medium tabular-nums",
-                  VALUE_LEADING,
-                  VALUE_FONT
+                  VALUE_LEADING
                 )}
               >
                 {flight.registration}
@@ -482,7 +462,7 @@ function SelectedFlightCardImpl({
           {showOwner ? (
             <div className="col-span-2 flex min-w-0 flex-col gap-1">
               <dt className={LABEL_CLASS}>Owner</dt>
-              <dd className={cn("truncate font-medium", VALUE_LEADING, VALUE_FONT)}>
+              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
                 {ownerLabel}
               </dd>
             </div>
@@ -492,7 +472,7 @@ function SelectedFlightCardImpl({
         <dl className="grid grid-cols-3 gap-2 text-xs">
           <div className="flex flex-col gap-1">
             <dt className={LABEL_CLASS}>Distance</dt>
-            <dd className={cn("font-medium tabular-nums", VALUE_LEADING, VALUE_FONT)}>
+            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
               {formatDistanceMiles(
                 getDistanceFromHomeBaseMiles(flight, homeBase)
               )}
@@ -503,8 +483,7 @@ function SelectedFlightCardImpl({
             <dd
               className={cn(
                 "flex items-baseline gap-1 font-medium tabular-nums",
-                VALUE_LEADING,
-                VALUE_FONT
+                VALUE_LEADING
               )}
             >
               {formatAltitude(
@@ -529,8 +508,7 @@ function SelectedFlightCardImpl({
             <dd
               className={cn(
                 "flex items-baseline gap-1 font-medium tabular-nums",
-                VALUE_LEADING,
-                VALUE_FONT
+                VALUE_LEADING
               )}
             >
               {formatAirspeed(flight.groundspeedKnots)}
