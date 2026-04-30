@@ -2,7 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import {
-  getListSecondaryLeft,
+  getOperatorLabel,
   getPrimaryIdentifier,
   getStripRouteLabel
 } from "@/lib/flights/display";
@@ -78,7 +78,11 @@ export function FlightListItem({
             Operator
           </small>
           <strong className="truncate font-medium">
-            {getListSecondaryLeft(flight)}
+            {/* Why: when there's no real operator info (no airline, no
+                non-manufacturer owner), show an em-dash rather than echoing
+                the callsign that's already in the strip's title above. The
+                old behavior fell back to the callsign which read as a bug. */}
+            {getOperatorLabel(flight) ?? "—"}
           </strong>
         </span>
         <span className="flex min-w-0 flex-col">

@@ -215,18 +215,26 @@ export function getOperatorLabel(flight: Flight) {
   const airline = flight.airline?.trim() ?? null;
   const registeredOwner = normalizeRegisteredOwnerLabel(flight.registeredOwner);
 
+  // Why: `airline` is typically a 3-letter ICAO code ("SWA", "AAL", "UAL")
+  // — useful for ATC, useless for a sidebar reading "Operator: SWA". When
+  // we also have a normalized registered owner ("Southwest Airlines"),
+  // prefer the readable name. Fall back to the code only when the owner
+  // field is missing or filtered out as a manufacturer ringer.
   if (airline && !looksLikeManufacturerName(airline)) {
-    return airline;
+    return registeredOwner ?? airline;
   }
 
   return registeredOwner ?? null;
 }
 
 export function getOperatorLabelTitle(flight: Flight) {
-  const airline = flight.airline?.trim() ?? null;
   const operatorLabel = getOperatorLabel(flight);
 
-  if (operatorLabel && airline && operatorLabel === airline && hasCommercialFlightIdentity(flight)) {
+  // Why: a commercial flight (has a flight number or commercial-pattern
+  // callsign) labels its operator as "Airline" regardless of whether the
+  // displayed string came from the ICAO code or the registered owner —
+  // the dt is about category, not provenance.
+  if (operatorLabel && flight.airline && hasCommercialFlightIdentity(flight)) {
     return "Airline";
   }
 
