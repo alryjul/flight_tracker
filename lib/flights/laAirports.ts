@@ -213,28 +213,33 @@ export const KNOWN_AIRPORTS: Airport[] = [
   { icao: "KNYL", iata: "YUM", name: "MCAS Yuma / Yuma International", latitude: 32.6566, longitude: -114.6061 },
 
   // ── Police / public-safety helipads ──
-  // Why: LAPD ASD launches almost exclusively from a couple of dedicated
-  // helipads that have no IATA code. AeroAPI returns either "L lat lon"
-  // pseudo-codes (which then reverse-geocode to neighborhood names like
-  // "Downtown") or FAA LIDs like "58CA" — neither of which a casual
-  // reader would recognize. Curating these entries (combined with the
-  // AIRPORT_CODE_DISPLAY_OVERRIDES table below) lets the route field
-  // read "From LAPD Hooper Heliport" / "LAPD Hooper Heliport to BUR"
-  // regardless of whether the AeroAPI path or the track-inference path
-  // filled the origin.
+  // Why: LAPD ASD, LASD, and LA-area municipal agencies launch from
+  // dedicated helipads that have no IATA code. AeroAPI returns either
+  // "L lat lon" pseudo-codes (which reverse-geocode to neighborhood
+  // names like "Downtown") or FAA LIDs like "58CA" / "3CA5" / "3CN5"
+  // — neither of which a casual reader would recognize. Curating
+  // these entries (combined with AIRPORT_CODE_DISPLAY_OVERRIDES below)
+  // lets the route field read "From LAPD Hooper Heliport" / "LASD
+  // West Hollywood Helistop to BUR" regardless of whether AeroAPI or
+  // track-inference filled origin.
   //
   // Convention: when an entry has no real IATA, put the canonical
   // readable name in the iata field — that's what the display shows.
-  // The icao field becomes a documentation-only agency code (LAPD-H,
-  // LAPD-L) since these helipads aren't in ICAO either. LASD Aero
-  // Bureau (Long Beach) and LAFD/CHP Air Ops (Van Nuys) are already
-  // covered by KLGB / KVNY in the LA basin section above.
+  // The icao field becomes a documentation-only agency tag since
+  // these helipads aren't in ICAO either. LASD Aero Bureau (Long
+  // Beach) and LAFD / CHP Air Ops (Van Nuys) are already covered by
+  // KLGB / KVNY in the LA basin section above.
+  //
+  // Coordinates come from airnav.com (FAA airport reference points).
+  // Add an entry when you spot a helipad that's reverse-geocoding to
+  // a neighborhood name; check airnav for its FAA LID and add a
+  // matching code override too.
   {
     icao: "LAPD-H",
     iata: "LAPD Hooper Heliport",
-    name: "LAPD Hooper Memorial Heliport (Piper Tech, Downtown LA)",
-    latitude: 34.0594,
-    longitude: -118.2381
+    name: "Jay Stephen Hooper Memorial Heliport (Piper Tech, Downtown LA)",
+    latitude: 34.0544,
+    longitude: -118.2295
   },
   {
     icao: "LAPD-L",
@@ -242,6 +247,41 @@ export const KNOWN_AIRPORTS: Airport[] = [
     name: "LAPD Lopez Canyon Heliport (Sylmar)",
     latitude: 34.3267,
     longitude: -118.3978
+  },
+  {
+    icao: "LASD-WH",
+    iata: "LASD West Hollywood Helistop",
+    name: "West Hollywood Sheriff's Helistop",
+    latitude: 34.0846,
+    longitude: -118.3835
+  },
+  {
+    icao: "LASD-S",
+    iata: "LASD South LA Heliport",
+    name: "Los Angeles County Sheriff's Department South LA Heliport",
+    latitude: 33.9286,
+    longitude: -118.2989
+  },
+  {
+    icao: "LASD-MP",
+    iata: "LASD Monterey Park Heliport",
+    name: "LA County Sheriff's Department Heliport (Monterey Park)",
+    latitude: 34.0245,
+    longitude: -117.9581
+  },
+  {
+    icao: "LAFD-CH",
+    iata: "LAFD City Hall East Heliport",
+    name: "Los Angeles City Hall East Heliport (LAFD)",
+    latitude: 34.053,
+    longitude: -118.2416
+  },
+  {
+    icao: "LAC-USC",
+    iata: "LAC+USC Medical Center",
+    name: "Los Angeles County / USC Medical Center Heliport",
+    latitude: 34.0597,
+    longitude: -118.2118
   },
 
   // ── Hawaii ──
@@ -255,19 +295,35 @@ export const KNOWN_AIRPORTS: Airport[] = [
   { icao: "PAFA", iata: "FAI", name: "Fairbanks International", latitude: 64.8151, longitude: -147.856 }
 ];
 
-// Why: AeroAPI sometimes returns FAA private-use heliport codes
-// ("58CA", various others) for facilities that have no IATA — the route
-// then reads as a meaningless five-character string. This map rewrites
-// those codes at the AeroAPI normalization step to the same canonical
-// readable name that the track-inference path uses, so both paths
-// agree on the display string regardless of which one filled origin.
+// Why: AeroAPI sometimes returns FAA private-use heliport codes ("58CA",
+// "3CA5", "3CN5", etc.) for municipal helipads that have no IATA — the
+// route then reads as a meaningless 4–5 character string. This map
+// rewrites those codes at the AeroAPI normalization step to the same
+// canonical readable name that the track-inference path produces from
+// KNOWN_AIRPORTS, so both paths agree on the display string regardless
+// of which one filled origin first.
 //
-// Add an entry when you spot a flight whose route reads as a numeric
-// FAA LID instead of a recognizable name. Match keys are upper-case;
-// codes are normalized before lookup.
+// Each entry should pair with a KNOWN_AIRPORTS entry above (same iata
+// value), so a flight that takes off from the helipad resolves
+// consistently whether AeroAPI sees the FAA LID or track inference
+// matches the lat/lon. Add new entries when you spot a flight whose
+// route reads as a numeric FAA LID. Match keys are upper-case; codes
+// are normalized before lookup.
 export const AIRPORT_CODE_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = {
-  "58CA": "LAPD Hooper Heliport"
-  // Lopez Canyon's FAA LID is unconfirmed — add when discovered.
+  // ── LAPD ──
+  "58CA": "LAPD Hooper Heliport", // Jay Stephen Hooper Memorial (current Piper Tech ARP)
+  "4CA0": "LAPD Hooper Heliport", // alternate LID, same facility per FAA records
+
+  // ── LASD ──
+  "3CA5": "LASD West Hollywood Helistop", // West Hollywood Sheriff's Helistop
+  "3CN5": "LASD South LA Heliport", // South LA Heliport
+  "7L5": "LASD Monterey Park Heliport", // main LASD Aero Bureau facility (Monterey Park)
+
+  // ── LAFD / city government ──
+  "59L": "LAFD City Hall East Heliport", // LA City Hall East rooftop, operated by LAFD
+
+  // ── Public hospitals (county/municipal) ──
+  "35CA": "LAC+USC Medical Center" // LA County / USC Medical Center
 };
 
 // Why: thin wrapper that handles trim+upper normalization + null pass-
