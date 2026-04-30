@@ -1,23 +1,27 @@
 "use client";
 
-// Why: ambient widget — a floating card on top of the map showing the
-// nearest aircraft. Mirrors the SelectedFlightCard's information
-// architecture (same labels, same sections, same dt/value pairs) so
-// users learn one card-shape and see it again here scaled up. The
-// only differences are:
-//   1. "NEAREST" header replaces FLIGHT/REGISTRATION dt
-//   2. Bearing + distance shown alongside the header
-//   3. Marquee values (flight number, FROM/TO codes) wrapped in
-//      split-flap displays for the solari-board flip aesthetic
-//   4. Larger type / more generous spacing
-//   5. No selected-flight enrichment, so no schedule times or status
-//      badge — those require a per-selection AeroAPI call which we
-//      don't trigger for the nearest aircraft.
+// Why: ambient widget styled as an airport split-flap display board.
+// Three hero rows of equal panel size — FLIGHT, FROM, TO — each
+// rendered as a labeled split-flap panel. Supporting flight info
+// (operator, registration, distance, altitude, airspeed) sits below
+// in muted text.
+//
+// Theming: wrapped in a forced `dark` className subtree so the whole
+// widget renders against shadcn's dark theme tokens regardless of
+// the user's app theme. Inside, semantic tokens (bg-card, bg-
+// background, text-foreground, text-muted-foreground, border-border)
+// resolve to their dark-theme values, giving us the "airport board"
+// aesthetic with theme-token consistency.
+//
+// Fixed width: prevents thrash when values change length (a 4-char
+// flight number turning into 7 chars would otherwise reflow the whole
+// card). Panels are full container width; split-flap content centers
+// within them, so a 3-cell airport code in the same panel as a 7-cell
+// flight number both look "in their slot" rather than left-aligned.
 
 import { useMemo } from "react";
 import { Helicopter, Plane } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { SplitFlapDisplay } from "@/components/ui/split-flap";
 import {
@@ -41,16 +45,21 @@ import type { Flight } from "@/lib/flights/types";
 import type { HomeBaseCenter } from "@/lib/types/flight-map";
 import { cn } from "@/lib/utils";
 
-// Why: dt label styling — same shape as SelectedFlightCard's LABEL_CLASS
-// but slightly larger size for ambient (text-xs vs text-[10px]). Letters
-// stay uppercase + tracking-wider for the labeled-metric register.
+// Why: dt label styling — uppercase + tracking-wider, muted color via
+// theme token (renders against the dark surface as a subtle gray).
 const LABEL_CLASS =
-  "text-xs leading-tight uppercase tracking-wider text-muted-foreground";
+  "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground";
 
 const VALUE_LEADING = "leading-tight";
 
-// Why: bearing from home base to the flight, mapped to a 16-point compass
-// (N, NNE, NE, ENE, ...). Lets the viewer know which direction to look up.
+// Why: each hero row pads to the same number of cells so the three
+// panels visually align. Flight numbers can run up to 7 chars
+// (PGR1390); airports are 3 chars. Pad both to 7 → all three split-
+// flap panels render with 7 cell positions, content centered inside
+// via the SplitFlapDisplay's padDirection.
+const HERO_CELL_LENGTH = 7;
+
+// Why: bearing from home base to the flight, mapped to a 16-point compass.
 function getCompassBearingLabel(
   flight: Flight,
   home: HomeBaseCenter
@@ -87,16 +96,11 @@ function getCompassBearingLabel(
 
 type AmbientViewProps = {
   flight: Flight | null;
-  /** Whether the displayed flight is the user-selected one (true) or
-   * the auto-tracked nearest aircraft (false). Drives the dt label. */
   isSelected: boolean;
   homeBase: HomeBaseCenter;
 };
 
 export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) {
-  // Why: compute everything before the JSX so the markup reads as a
-  // straight mirror of SelectedFlightCard. nullable-flight handled by
-  // the early-return below.
   const distanceMiles = flight
     ? getDistanceFromHomeBaseMiles(flight, homeBase)
     : null;
@@ -105,16 +109,177 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
     [flight, homeBase]
   );
 
-  if (!flight) {
-    return (
-      <AmbientShell>
-        <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+  return (
+    <AmbientShell>
+      {/* Header — Nearest/Selected + bearing/distance */}
+      <div className="flex items-baseline justify-between gap-3">
+        <p className={LABEL_CLASS}>{isSelected ? "Selected" : "Nearest"}</p>
+        {flight && bearing && distanceMiles != null ? (
+          <p className="text-[10px] tabular-nums uppercase tracking-wider text-muted-foreground">
+            {formatDistanceMiles(distanceMiles)} · {bearing}
+          </p>
+        ) : null}
+      </div>
+
+      {flight ? (
+        <>
+          {/* Hero rows — three equal-size split-flap panels */}
+          <div className="flex flex-col gap-2.5">
+            <HeroRow
+              label="Flight"
+              value={getPrimaryIdentifier(flight).toUpperCase()}
+              charSet="alphanumeric"
+            />
+            <HeroRow
+              label="From"
+              value={isShortAirportCode(flight.origin) ? flight.origin : ""}
+              fallback={!isShortAirportCode(flight.origin) ? flight.origin : null}
+              charSet="alphanumericExtra"
+            />
+            <HeroRow
+              label="To"
+              value={
+                isShortAirportCode(flight.destination) ? flight.destination : ""
+              }
+              fallback={
+                !isShortAirportCode(flight.destination) ? flight.destination : null
+              }
+              charSet="alphanumericExtra"
+            />
+          </div>
+
+          <Separator className="bg-border/60" />
+
+          {/* Aircraft + operator stack */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
+            <p className={cn("truncate text-xs text-muted-foreground", VALUE_LEADING)}>
+              {getAircraftTypeFull(flight.aircraftType)}
+            </p>
+          </div>
+
+          {/* Operator / Registration / Owner — same dl pattern as the
+              SelectedFlightCard, but smaller and muted to keep the
+              hero rows above as the focus. */}
+          <InfoStack flight={flight} />
+
+          <Separator className="bg-border/60" />
+
+          {/* Stats row — Distance / Altitude / Airspeed */}
+          <dl className="grid grid-cols-3 gap-3 text-xs">
+            <Stat label="Distance">
+              {distanceMiles != null ? formatDistanceMiles(distanceMiles) : "—"}
+            </Stat>
+            <Stat label="Altitude">{formatAltitude(flight.altitudeFeet)}</Stat>
+            <Stat label="Airspeed">{formatAirspeed(flight.groundspeedKnots)}</Stat>
+          </dl>
+        </>
+      ) : (
+        <p className="py-6 text-center text-sm text-muted-foreground">
           Waiting for an aircraft in range…
         </p>
-      </AmbientShell>
-    );
-  }
-  const primaryIdentifier = getPrimaryIdentifier(flight).toUpperCase();
+      )}
+    </AmbientShell>
+  );
+}
+
+// Why: outer shell — fixed width, top-center positioning, the always-
+// dark wrapping. The `dark` className forces shadcn's dark-theme
+// tokens for the entire subtree regardless of user theme, so we still
+// reference theme-aware semantic tokens (bg-card, bg-background,
+// text-foreground, etc.) and they resolve to airport-board colors.
+function AmbientShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="dark pointer-events-none fixed top-4 left-1/2 z-30 -translate-x-1/2">
+      <div className="pointer-events-auto flex w-96 flex-col gap-3 rounded-lg border border-border bg-card px-4 py-4 text-card-foreground shadow-2xl">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Why: shared shape for the three hero rows. Each renders a label
+// above a full-width split-flap panel. Content is centered inside
+// the fixed-cell-count display so a 3-letter airport code reads as
+// "centered in its slot" rather than "left-aligned with empty
+// trailing cells."
+function HeroRow({
+  label,
+  value,
+  charSet,
+  fallback
+}: {
+  label: string;
+  value: string;
+  charSet: "alphanumeric" | "alphanumericExtra" | "alpha" | "numeric";
+  fallback?: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <p className={LABEL_CLASS}>{label}</p>
+      <div className="flex items-center justify-center rounded-md bg-background px-3 py-2 text-foreground shadow-inner ring-1 ring-border/30">
+        {fallback ? (
+          // Why: long readable names (LAPD Hooper Heliport, Cedars-
+          // Sinai Medical Center) don't fit in 7 split-flap cells —
+          // fall back to plain text in the same panel slot, centered
+          // and at the same vertical height so panel sizes stay
+          // equal across rows.
+          <p className="truncate text-2xl font-semibold tracking-wider">
+            {fallback}
+          </p>
+        ) : (
+          <SplitFlapDisplay
+            value={value}
+            charSet={charSet}
+            length={HERO_CELL_LENGTH}
+            padDirection="end"
+            cycleMs={45}
+            flipMs={300}
+            className="text-2xl font-semibold tracking-wider"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Why: helper to test if an airport "code" is short enough to render
+// as a split-flap (≤4 chars; covers IATA + most FAA LIDs). Long
+// readable names (LAPD Hooper Heliport, Cedars-Sinai Medical Center)
+// fall through to text fallback.
+function isShortAirportCode(value: string | null): value is string {
+  return value != null && value.length > 0 && value.length <= 4;
+}
+
+function getAircraftTypeFull(aircraftType: string | null): string {
+  const resolved = resolveAircraftType(aircraftType);
+  if (resolved) return resolved.full;
+  return aircraftType?.trim().toUpperCase() ?? "Unknown type";
+}
+
+// Why: ambient-sized aircraft type badge — strips the Tooltip wrapper
+// from SelectedFlightCard's version since the user is glancing here,
+// not hovering. Just icon + short name, theme-aware via Badge variant.
+function AmbientAircraftTypeBadge({
+  aircraftType
+}: {
+  aircraftType: string | null;
+}) {
+  const label = getAircraftTypeBadgeLabel(aircraftType);
+  const Icon = isHelicopterType(aircraftType) ? Helicopter : Plane;
+  return (
+    <Badge variant="secondary" className="text-xs">
+      <Icon aria-hidden="true" />
+      {label}
+    </Badge>
+  );
+}
+
+// Why: operator + registration + owner block. Same dl shape as
+// SelectedFlightCard but smaller and muted (text-xs labels, text-xs
+// values) — the hero rows above are the focus, this is just
+// supporting detail.
+function InfoStack({ flight }: { flight: Flight }) {
   const operatorLabel = getOperatorLabel(flight);
   const operatorTitle = getOperatorLabelTitle(flight);
   const showRegistration =
@@ -123,222 +288,61 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
   const ownerLabel = normalizeRegisteredOwnerLabel(flight.registeredOwner);
   const showOwner = ownerLabel != null && ownerLabel !== operatorLabel;
 
+  if (!operatorLabel && !showRegistration && !showOwner) return null;
+
   return (
-    <AmbientShell>
-      <CardHeader className="gap-3 px-5 pt-5">
-        {/* Header row — "NEAREST" + bearing/distance on left, type
-            badge on right. Mirrors SelectedFlightCard's
-            FLIGHT/REGISTRATION dt + badges layout. */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-2">
-            <p className={LABEL_CLASS}>
-              {isSelected ? "Selected" : "Nearest"}
-              {bearing && distanceMiles != null ? (
-                <span className="ml-2 normal-case tracking-normal text-foreground/60 tabular-nums">
-                  {formatDistanceMiles(distanceMiles)} · {bearing}
-                </span>
-              ) : null}
-            </p>
-            {/* Split-flap title. Length pads to 6 chars min so short
-                callsigns (CMD7, EJA471) don't make the panel collapse. */}
-            <div className="rounded-md bg-foreground px-3 py-2 text-background shadow-md">
-              <SplitFlapDisplay
-                value={primaryIdentifier}
-                charSet="alphanumeric"
-                length={Math.max(primaryIdentifier.length, 6)}
-                cycleMs={42}
-                flipMs={300}
-                className="text-3xl font-semibold tracking-wider"
-              />
-            </div>
-          </div>
-          <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
+    <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+      {operatorLabel ? (
+        <div
+          className={cn(
+            "flex min-w-0 flex-col gap-1",
+            !showRegistration && "col-span-2"
+          )}
+        >
+          <dt className={LABEL_CLASS}>{operatorTitle}</dt>
+          <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+            {operatorLabel}
+          </dd>
         </div>
-
-        {/* Route row — FROM / TO with split-flaps for short codes,
-            plain text for long readable names. */}
-        <AmbientRouteRow flight={flight} />
-      </CardHeader>
-
-      <CardContent className="px-5 pb-5">
-        {/* Operator / Registration / Owner — same dl layout as
-            SelectedFlightCard. Larger text-sm for ambient. */}
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-          {operatorLabel ? (
-            <div
-              className={cn(
-                "flex min-w-0 flex-col gap-1",
-                !showRegistration && "col-span-2"
-              )}
-            >
-              <dt className={LABEL_CLASS}>{operatorTitle}</dt>
-              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
-                {operatorLabel}
-              </dd>
-            </div>
-          ) : null}
-          {showRegistration ? (
-            <div
-              className={cn(
-                "flex min-w-0 flex-col gap-1",
-                !operatorLabel && "col-span-2"
-              )}
-            >
-              <dt className={LABEL_CLASS}>Registration</dt>
-              <dd
-                className={cn(
-                  "truncate font-medium tabular-nums",
-                  VALUE_LEADING
-                )}
-              >
-                {flight.registration}
-              </dd>
-            </div>
-          ) : null}
-          {showOwner ? (
-            <div className="col-span-2 flex min-w-0 flex-col gap-1">
-              <dt className={LABEL_CLASS}>Owner</dt>
-              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
-                {ownerLabel}
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-
-        <Separator className="my-3" />
-
-        {/* Stats — Distance / Altitude / Airspeed, mirrors
-            SelectedFlightCard's metrics row. */}
-        <dl className="grid grid-cols-3 gap-3 text-sm">
-          <div className="flex flex-col gap-1">
-            <dt className={LABEL_CLASS}>Distance</dt>
-            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
-              {formatDistanceMiles(
-                getDistanceFromHomeBaseMiles(flight, homeBase)
-              )}
-            </dd>
-          </div>
-          <div className="flex flex-col gap-1">
-            <dt className={LABEL_CLASS}>Altitude</dt>
-            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
-              {formatAltitude(flight.altitudeFeet)}
-            </dd>
-          </div>
-          <div className="flex flex-col gap-1">
-            <dt className={LABEL_CLASS}>Airspeed</dt>
-            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
-              {formatAirspeed(flight.groundspeedKnots)}
-            </dd>
-          </div>
-        </dl>
-      </CardContent>
-    </AmbientShell>
+      ) : null}
+      {showRegistration ? (
+        <div
+          className={cn(
+            "flex min-w-0 flex-col gap-1",
+            !operatorLabel && "col-span-2"
+          )}
+        >
+          <dt className={LABEL_CLASS}>Registration</dt>
+          <dd className={cn("truncate font-medium tabular-nums", VALUE_LEADING)}>
+            {flight.registration}
+          </dd>
+        </div>
+      ) : null}
+      {showOwner ? (
+        <div className="col-span-2 flex min-w-0 flex-col gap-1">
+          <dt className={LABEL_CLASS}>Owner</dt>
+          <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+            {ownerLabel}
+          </dd>
+        </div>
+      ) : null}
+    </dl>
   );
 }
 
-// Why: outer shell — fixed positioning, glassmorphic background, the
-// pointer-events handling. Pulled out so the early-return waiting
-// state and the populated state share the same chrome.
-function AmbientShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="pointer-events-none fixed top-4 left-1/2 z-30 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2">
-      <Card className="pointer-events-auto gap-3 border-border/60 bg-card/95 py-0 shadow-xl backdrop-blur-sm">
-        {children}
-      </Card>
-    </div>
-  );
-}
-
-// Why: ambient-sized version of SelectedFlightCard's AircraftTypeBadge.
-// We don't import the real one because it carries a Tooltip+Provider
-// per badge that's overkill for the ambient surface, where the user
-// is glancing not hovering. Just the icon + short name.
-function AmbientAircraftTypeBadge({
-  aircraftType
+// Why: stat cell — label + value column, used in the bottom 3-col
+// metrics row.
+function Stat({
+  label,
+  children
 }: {
-  aircraftType: string | null;
+  label: string;
+  children: React.ReactNode;
 }) {
-  const resolved = resolveAircraftType(aircraftType);
-  const label = getAircraftTypeBadgeLabel(aircraftType);
-  const Icon = isHelicopterType(aircraftType) ? Helicopter : Plane;
   return (
-    <Badge
-      variant="secondary"
-      className="text-xs"
-      title={resolved?.full ?? label}
-    >
-      <Icon aria-hidden="true" />
-      {label}
-    </Badge>
-  );
-}
-
-// Why: ambient version of FlightRouteRow — same FROM / TO split as
-// SelectedFlightCard, but each airport code wrapped in a split-flap
-// panel when it's short (≤4 chars / IATA code). Long readable names
-// (helipads, hospital names) fall back to plain text in the same
-// position because a 20-cell split-flap on "LAPD Hooper Heliport"
-// would be visually broken.
-function AmbientRouteRow({ flight }: { flight: Flight }) {
-  const origin = flight.origin;
-  const destination = flight.destination;
-
-  if (origin && destination) {
-    return (
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={LABEL_CLASS}>From</p>
-          <AirportCell code={origin} />
-        </div>
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={LABEL_CLASS}>To</p>
-          <AirportCell code={destination} />
-        </div>
-      </div>
-    );
-  }
-
-  if (origin) {
-    return (
-      <div className="flex min-w-0 flex-col gap-1">
-        <p className={LABEL_CLASS}>From</p>
-        <AirportCell code={origin} />
-      </div>
-    );
-  }
-
-  if (destination) {
-    return (
-      <div className="flex min-w-0 flex-col gap-1">
-        <p className={LABEL_CLASS}>To</p>
-        <AirportCell code={destination} />
-      </div>
-    );
-  }
-
-  return null;
-}
-
-function AirportCell({ code }: { code: string }) {
-  const isShortCode = code.length <= 4;
-  if (isShortCode) {
-    return (
-      <div className="inline-block w-fit rounded-md bg-foreground px-2.5 py-1.5 text-background shadow-md">
-        <SplitFlapDisplay
-          value={code}
-          charSet="alpha"
-          length={3}
-          padDirection="end"
-          cycleMs={50}
-          flipMs={300}
-          className="text-2xl font-semibold tracking-wider"
-        />
-      </div>
-    );
-  }
-  return (
-    <p className={cn("truncate text-base font-medium", VALUE_LEADING)}>
-      {code}
-    </p>
+    <div className="flex flex-col gap-1">
+      <dt className={LABEL_CLASS}>{label}</dt>
+      <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>{children}</dd>
+    </div>
   );
 }
