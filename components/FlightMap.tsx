@@ -50,7 +50,8 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
-  SidebarTrigger
+  SidebarTrigger,
+  useSidebar
 } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { AreaConfigPopover } from "@/components/flight-tracker/AreaConfigPopover";
@@ -128,12 +129,25 @@ export function FlightMap() {
   const [mapLabelVisibility, setMapLabelVisibility] = useState<MapLabelVisibility>(
     DEFAULT_MAP_LABEL_VISIBILITY
   );
-  // Why: ambient mode = full-viewport "look at this" overlay showing the
-  // nearest aircraft via large split-flap displays. Toggleable; the
-  // map keeps polling underneath so re-entering returns to the live
-  // session immediately. Esc inside AmbientView also calls back to
-  // setAmbientMode(false).
+  // Why: ambient mode = floating "look at this" widget over the map
+  // showing the nearest aircraft via large split-flap displays.
+  // Toggleable; the map keeps polling underneath so re-entering
+  // returns to the live session immediately.
   const [ambientMode, setAmbientMode] = useState(false);
+
+  // Why: drive the sidebar's open state from ambient mode — when the
+  // user enters ambient, collapse the sidebar so the chrome gets out
+  // of the way. When they exit, restore it. Uses the SidebarProvider
+  // context exposed at app/page.tsx; setOpen handles desktop, and
+  // setOpenMobile handles the mobile sheet variant.
+  const { setOpen: setSidebarOpen, setOpenMobile: setSidebarOpenMobile } =
+    useSidebar();
+  useEffect(() => {
+    setSidebarOpen(!ambientMode);
+    if (ambientMode) {
+      setSidebarOpenMobile(false);
+    }
+  }, [ambientMode, setSidebarOpen, setSidebarOpenMobile]);
   const [areaDraft, setAreaDraft] = useState({
     latitude: APP_CONFIG.center.latitude.toFixed(4),
     longitude: APP_CONFIG.center.longitude.toFixed(4),
