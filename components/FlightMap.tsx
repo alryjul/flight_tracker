@@ -390,8 +390,18 @@ export function FlightMap() {
   useEffect(() => {
     displayFlightsRef.current = displayFlights;
   }, [displayFlights]);
+  // Why: only resolve a selected flight when there's an explicit
+  // selectedFlightId state. Previously this fell back to
+  // displayFlights[0] when no selection existed — which meant
+  // calling setSelectedFlightId(null) (e.g., from the map-background
+  // click deselect handler) silently re-bound the UI to whatever
+  // flight happened to be first in the visible list. The "deselect"
+  // state was unreachable: clicking off a flight just shifted the
+  // selection sideways instead of clearing it.
   const selectedFlightBase =
-    displayFlights.find((flight) => flight.id === selectedFlightId) ?? displayFlights[0] ?? null;
+    selectedFlightId != null
+      ? (displayFlights.find((flight) => flight.id === selectedFlightId) ?? null)
+      : null;
   const activeSelectedFlightDetails =
     selectedFlightBase != null &&
     selectedFlightDetailsFlightIdRef.current === selectedFlightBase.id &&
