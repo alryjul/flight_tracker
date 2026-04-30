@@ -56,11 +56,14 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { AreaConfigPopover } from "@/components/flight-tracker/AreaConfigPopover";
 import { FlightList } from "@/components/flight-tracker/FlightList";
 import { MapCanvas } from "@/components/flight-tracker/MapCanvas";
+import { AmbientView } from "@/components/flight-tracker/AmbientView";
 import {
   DEFAULT_MAP_LABEL_VISIBILITY,
   MapLayersPopover,
   type MapLabelVisibility
 } from "@/components/flight-tracker/MapLayersPopover";
+import { Tv } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { MapHoverCard } from "@/components/flight-tracker/MapHoverCard";
 import { SelectedFlightCard } from "@/components/flight-tracker/SelectedFlightCard";
 import { SourceStatusFooter } from "@/components/flight-tracker/SourceStatusFooter";
@@ -125,6 +128,12 @@ export function FlightMap() {
   const [mapLabelVisibility, setMapLabelVisibility] = useState<MapLabelVisibility>(
     DEFAULT_MAP_LABEL_VISIBILITY
   );
+  // Why: ambient mode = full-viewport "look at this" overlay showing the
+  // nearest aircraft via large split-flap displays. Toggleable; the
+  // map keeps polling underneath so re-entering returns to the live
+  // session immediately. Esc inside AmbientView also calls back to
+  // setAmbientMode(false).
+  const [ambientMode, setAmbientMode] = useState(false);
   const [areaDraft, setAreaDraft] = useState({
     latitude: APP_CONFIG.center.latitude.toFixed(4),
     longitude: APP_CONFIG.center.longitude.toFixed(4),
@@ -1354,14 +1363,28 @@ export function FlightMap() {
       <MapHoverCard hoveredFlight={hoveredFlight} hoveredFlightDisplay={hoveredFlightDisplay} />
       <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
 
-      {/* Why: floating map toolbar — one container holds both the
-          layer-toggle button and the area-config button so they read
-          as a related pair (both modify "what the map shows"), with
-          MapLibre's zoom buttons sitting separately to the right of
-          this toolbar at the viewport corner. right-12 anchors the
-          toolbar's right edge 48px from the viewport right, clearing
-          the ~30px-wide zoom-control stack at right:10. */}
+      {ambientMode ? (
+        <AmbientView nearestFlight={nearestFlight} homeBase={homeBase} />
+      ) : null}
+
+      {/* Why: floating map toolbar — one container holds the ambient
+          toggle, layer-toggle button, and area-config button so they
+          read as a related set of "what the map shows" controls.
+          MapLibre's zoom buttons sit separately to the right at the
+          viewport corner. right-12 anchors the toolbar's right edge
+          48px from the viewport right, clearing the ~30px-wide
+          zoom-control stack at right:10. */}
       <div className="fixed right-12 bottom-2.5 z-20 flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 gap-1.5 bg-card px-2.5 shadow-md"
+          aria-label={ambientMode ? "Exit ambient view" : "Show ambient view"}
+          aria-pressed={ambientMode}
+          onClick={() => setAmbientMode((prev) => !prev)}
+        >
+          <Tv className="size-4" aria-hidden="true" />
+        </Button>
         <MapLayersPopover
           visibility={mapLabelVisibility}
           onVisibilityChange={setMapLabelVisibility}

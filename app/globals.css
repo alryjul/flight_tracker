@@ -128,3 +128,56 @@
     }
 }
 
+/* Why: split-flap (Solari board) display animation primitives. The mechanic
+   uses 4 stacked half-clipped layers per character cell — two static halves
+   showing the steady state, two animated halves performing the visible
+   flip. Keyframes drive the rotateX flip; clip-paths slice each layer to
+   either the top or bottom half so the layers compose without showing
+   their hidden halves.
+
+   The component lives in components/ui/split-flap.tsx; these styles live
+   here because keyframes don't compose well as inline styles and Tailwind
+   v4's arbitrary @keyframes syntax is awkward when shared across files. */
+.split-flap-clip-top {
+  clip-path: polygon(0 50%, 100% 50%, 100% 0, 0 0);
+}
+
+.split-flap-clip-bottom {
+  clip-path: polygon(0 100%, 100% 100%, 100% 50%, 0 50%);
+}
+
+@keyframes split-flap-flip-down-top {
+  from {
+    transform: rotateX(0deg);
+  }
+  50%, to {
+    transform: rotateX(90deg);
+  }
+}
+
+@keyframes split-flap-flip-down-bottom {
+  from, 50% {
+    transform: rotateX(90deg);
+  }
+  90% {
+    transform: rotateX(20deg);
+  }
+  80%, to {
+    transform: rotateX(0deg);
+  }
+}
+
+.split-flap-anim-top {
+  animation-name: split-flap-flip-down-top;
+  animation-timing-function: ease-in;
+  animation-duration: var(--split-flap-flip-ms, 300ms);
+  animation-fill-mode: forwards;
+}
+
+.split-flap-anim-bottom {
+  animation-name: split-flap-flip-down-bottom;
+  animation-timing-function: ease-out;
+  animation-duration: var(--split-flap-flip-ms, 300ms);
+  animation-fill-mode: forwards;
+}
+
