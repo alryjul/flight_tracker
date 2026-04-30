@@ -47,6 +47,22 @@ type SelectedFlightCardProps = {
   airspeedTrend: TrendDirection;
 };
 
+// Why: every dt label across the card uses the same compact uppercase
+// styling. Pinning leading-tight (vs. the cascaded text-xs/relaxed
+// 1.625 from Card) gives all labels a 12.5px line-box for 10px text —
+// no extra "leading" space below the label glyphs that would otherwise
+// inflate the visible gap to the value below.
+const LABEL_CLASS =
+  "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground";
+
+// Why: same story for values — each value across the card pins
+// leading-tight so the line-box height stays tight to the glyphs
+// regardless of font size. Without this, header values (text-lg, 22.5px
+// box) and content values (text-xs, 19.5px box) sit in differently-tall
+// boxes, making the dt-to-value gap look uneven across blocks even
+// when gap-1 is applied uniformly.
+const VALUE_LEADING = "leading-tight";
+
 // Why: the card title shows the IATA flight number ("WN1184") because
 // it's what passengers see on boarding passes — the friendly hero
 // signifier. The ICAO callsign ("SWA1184") and spoken radio call
@@ -133,7 +149,7 @@ function SelectedFlightCardImpl({
             the big title. */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 flex-col gap-1">
-            <CardDescription className="text-[10px] uppercase tracking-wider">
+            <CardDescription className={LABEL_CLASS}>
               {getIdentifierLabel(flight)}
             </CardDescription>
             <FlightTitleWithRadioTooltip flight={flight} />
@@ -156,10 +172,13 @@ function SelectedFlightCardImpl({
             "BUR to SJC" / "From SMO" / "Route pending" / "VFR" — so
             this slot never goes blank. */}
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Route
-          </p>
-          <p className="truncate text-sm font-medium tabular-nums">
+          <p className={LABEL_CLASS}>Route</p>
+          <p
+            className={cn(
+              "truncate text-sm font-medium tabular-nums",
+              VALUE_LEADING
+            )}
+          >
             {getStripRouteLabel(flight)}
           </p>
         </div>
@@ -178,10 +197,10 @@ function SelectedFlightCardImpl({
                 !showRegistration && "col-span-2"
               )}
             >
-              <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {getOperatorLabelTitle(flight)}
-              </dt>
-              <dd className="truncate font-medium">{operatorLabel}</dd>
+              <dt className={LABEL_CLASS}>{getOperatorLabelTitle(flight)}</dt>
+              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+                {operatorLabel}
+              </dd>
             </div>
           ) : null}
           {showRegistration ? (
@@ -191,40 +210,44 @@ function SelectedFlightCardImpl({
                 !operatorLabel && "col-span-2"
               )}
             >
-              <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Registration
-              </dt>
-              <dd className="truncate font-medium tabular-nums">
+              <dt className={LABEL_CLASS}>Registration</dt>
+              <dd
+                className={cn(
+                  "truncate font-medium tabular-nums",
+                  VALUE_LEADING
+                )}
+              >
                 {flight.registration}
               </dd>
             </div>
           ) : null}
           {showOwner ? (
             <div className="col-span-2 flex min-w-0 flex-col gap-1">
-              <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Owner
-              </dt>
-              <dd className="truncate font-medium">{ownerLabel}</dd>
+              <dt className={LABEL_CLASS}>Owner</dt>
+              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+                {ownerLabel}
+              </dd>
             </div>
           ) : null}
         </dl>
         <Separator className="my-2" />
         <dl className="grid grid-cols-3 gap-2 text-xs">
           <div className="flex flex-col gap-1">
-            <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Distance
-            </dt>
-            <dd className="font-medium tabular-nums">
+            <dt className={LABEL_CLASS}>Distance</dt>
+            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
               {formatDistanceMiles(
                 getDistanceFromHomeBaseMiles(flight, homeBase)
               )}
             </dd>
           </div>
           <div className="flex flex-col gap-1">
-            <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Altitude
-            </dt>
-            <dd className="flex items-baseline gap-1 font-medium tabular-nums">
+            <dt className={LABEL_CLASS}>Altitude</dt>
+            <dd
+              className={cn(
+                "flex items-baseline gap-1 font-medium tabular-nums",
+                VALUE_LEADING
+              )}
+            >
               {formatAltitude(
                 flight.altitudeFeet,
                 details?.status
@@ -243,10 +266,13 @@ function SelectedFlightCardImpl({
             </dd>
           </div>
           <div className="flex flex-col gap-1">
-            <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Airspeed
-            </dt>
-            <dd className="flex items-baseline gap-1 font-medium tabular-nums">
+            <dt className={LABEL_CLASS}>Airspeed</dt>
+            <dd
+              className={cn(
+                "flex items-baseline gap-1 font-medium tabular-nums",
+                VALUE_LEADING
+              )}
+            >
               {formatAirspeed(flight.groundspeedKnots)}
               {airspeedTrend ? (
                 <span
