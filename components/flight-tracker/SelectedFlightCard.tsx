@@ -285,7 +285,7 @@ function AircraftTypeBadge({
             {label}
           </Badge>
         </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" className="flex flex-col gap-0.5">
+        <TooltipContent side="bottom" align="start" className="flex flex-col gap-0.5">
           {aircraftType ? (
             <span className="tabular-nums">
               <span className="text-background/70">ICAO </span>
