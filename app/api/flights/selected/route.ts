@@ -257,6 +257,16 @@ export async function GET(request: NextRequest) {
             flight.registration,
           registeredOwner: resolvedOwner,
           status: trustedAeroApiMetadata?.status ?? null,
+          // Schedule times only come from AeroAPI; the adsbdb / track
+          // fallbacks have no schedule data, so these surface as null
+          // when AeroAPI metadata is unavailable. Display layer hides
+          // the time line when null.
+          scheduledOut: trustedAeroApiMetadata?.scheduledOut ?? null,
+          estimatedOut: trustedAeroApiMetadata?.estimatedOut ?? null,
+          actualOut: trustedAeroApiMetadata?.actualOut ?? null,
+          scheduledIn: trustedAeroApiMetadata?.scheduledIn ?? null,
+          estimatedIn: trustedAeroApiMetadata?.estimatedIn ?? null,
+          actualIn: trustedAeroApiMetadata?.actualIn ?? null,
           track: selectedTrack
         };
 
@@ -337,6 +347,14 @@ export async function GET(request: NextRequest) {
             registration: adsbdbMetadata?.registration ?? flight.registration,
             registeredOwner: fallbackResolvedOwner,
             status: null,
+            // Schedule times are AeroAPI-only; this fallback path runs
+            // when AeroAPI failed, so they're all null.
+            scheduledOut: null,
+            estimatedOut: null,
+            actualOut: null,
+            scheduledIn: null,
+            estimatedIn: null,
+            actualIn: null,
             track: fallbackTrack
           }
         : null;

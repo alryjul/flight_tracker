@@ -584,6 +584,15 @@ export function mergeSelectedFlightDetailPayload(
       registration: nextDetails.registration ?? currentDetails.registration,
       registeredOwner: nextDetails.registeredOwner ?? currentDetails.registeredOwner,
       status: nextDetails.status ?? currentDetails.status,
+      // Why: schedule times follow the same merge policy as the rest —
+      // prefer fresh from nextDetails, fall back to existing values
+      // when next is null (in case AeroAPI didn't refresh on this poll).
+      scheduledOut: nextDetails.scheduledOut ?? currentDetails.scheduledOut,
+      estimatedOut: nextDetails.estimatedOut ?? currentDetails.estimatedOut,
+      actualOut: nextDetails.actualOut ?? currentDetails.actualOut,
+      scheduledIn: nextDetails.scheduledIn ?? currentDetails.scheduledIn,
+      estimatedIn: nextDetails.estimatedIn ?? currentDetails.estimatedIn,
+      actualIn: nextDetails.actualIn ?? currentDetails.actualIn,
       track
     },
     trackFreshAtMs: refreshedAtMs

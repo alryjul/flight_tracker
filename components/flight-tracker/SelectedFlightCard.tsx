@@ -20,6 +20,8 @@ import {
 import {
   formatAirspeed,
   formatAltitude,
+  getArrivalTimeDisplay,
+  getDepartureTimeDisplay,
   getFlightStatusSeverity,
   getIdentifierLabel,
   getMeaningfulFlightStatus,
@@ -29,7 +31,8 @@ import {
   getRadiotelephonyCall,
   getStripRouteLabel,
   normalizeRegisteredOwnerLabel,
-  type FlightStatusSeverity
+  type FlightStatusSeverity,
+  type ScheduleTimes
 } from "@/lib/flights/display";
 import {
   getAircraftTypeBadgeLabel,
@@ -191,6 +194,24 @@ function AirportValue({ code }: { code: string }) {
   );
 }
 
+// Why: small muted line under each airport showing the most-current
+// departure / arrival time when AeroAPI provides schedule data.
+// "Dep 3:45 PM" / "ETA 4:58 PM" / "Arr 4:58 PM" / "Sched X:XX PM".
+// Helpers in display.ts pick the variant + label.
+function ScheduleTimeLine({
+  display
+}: {
+  display: { label: string; time: string } | null;
+}) {
+  if (!display) return null;
+  return (
+    <p className="truncate text-[10px] leading-tight tabular-nums text-muted-foreground">
+      <span className="text-foreground/70">{display.label}</span>{" "}
+      {display.time}
+    </p>
+  );
+}
+
 // Why: route row splits into FROM / TO when both endpoints are known
 // so each side gets its own half-width column for truncation
 // breathing room (long helipad / medical center names like "LAPD
@@ -198,9 +219,22 @@ function AirportValue({ code }: { code: string }) {
 // single-line "X to Y" without truncating). Falls back to a single
 // full-width labeled row when only one endpoint is known, or to the
 // VFR / Route pending status when neither is.
-function FlightRouteRow({ flight }: { flight: Flight }) {
+//
+// When AeroAPI schedule data is available (commercial flights with
+// metadata), a small muted time line sits under each airport: "Dep
+// 3:45 PM" under FROM, "ETA 4:58 PM" under TO. Hidden for non-
+// commercial / unfiled flights where AeroAPI has no schedule.
+function FlightRouteRow({
+  flight,
+  scheduleTimes
+}: {
+  flight: Flight;
+  scheduleTimes: ScheduleTimes | null;
+}) {
   const origin = flight.origin;
   const destination = flight.destination;
+  const departureDisplay = scheduleTimes ? getDepartureTimeDisplay(scheduleTimes) : null;
+  const arrivalDisplay = scheduleTimes ? getArrivalTimeDisplay(scheduleTimes) : null;
 
   if (origin && destination) {
     return (
@@ -208,10 +242,12 @@ function FlightRouteRow({ flight }: { flight: Flight }) {
         <div className="flex min-w-0 flex-col gap-1">
           <p className={LABEL_CLASS}>From</p>
           <AirportValue code={origin} />
+          <ScheduleTimeLine display={departureDisplay} />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
           <p className={LABEL_CLASS}>To</p>
           <AirportValue code={destination} />
+          <ScheduleTimeLine display={arrivalDisplay} />
         </div>
       </div>
     );
@@ -222,6 +258,7 @@ function FlightRouteRow({ flight }: { flight: Flight }) {
       <div className="flex min-w-0 flex-col gap-1">
         <p className={LABEL_CLASS}>From</p>
         <AirportValue code={origin} />
+        <ScheduleTimeLine display={departureDisplay} />
       </div>
     );
   }
@@ -231,6 +268,7 @@ function FlightRouteRow({ flight }: { flight: Flight }) {
       <div className="flex min-w-0 flex-col gap-1">
         <p className={LABEL_CLASS}>To</p>
         <AirportValue code={destination} />
+        <ScheduleTimeLine display={arrivalDisplay} />
       </div>
     );
   }
@@ -327,6 +365,21 @@ function SelectedFlightCardImpl({
     ? STATUS_BADGE_STYLES[getFlightStatusSeverity(meaningfulStatus)]
     : null;
 
+  // Why: pull schedule times once and pass to the route row. null when
+  // details aren't available (commercial pre-enrichment, GA / private
+  // flights AeroAPI doesn't have data for) — route row hides the time
+  // line in that case.
+  const scheduleTimes: ScheduleTimes | null = details
+    ? {
+        scheduledOut: details.scheduledOut,
+        estimatedOut: details.estimatedOut,
+        actualOut: details.actualOut,
+        scheduledIn: details.scheduledIn,
+        estimatedIn: details.estimatedIn,
+        actualIn: details.actualIn
+      }
+    : null;
+
   return (
     <Card className="mx-1 mt-2 mb-2 shrink-0 gap-3 py-3">
       <CardHeader className="gap-2 px-3">
@@ -362,7 +415,7 @@ function SelectedFlightCardImpl({
             helipad / medical center names). Falls back to a single
             full-width row for origin-only, destination-only, or
             no-route cases (VFR / Route pending). */}
-        <FlightRouteRow flight={flight} />
+        <FlightRouteRow flight={flight} scheduleTimes={scheduleTimes} />
       </CardHeader>
       <CardContent className="px-3">
         {/* Why: each dl cell wraps its dt+dd in `flex flex-col gap-1` so

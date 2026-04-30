@@ -242,6 +242,77 @@ export function getStripRouteLabel(flight: Flight) {
   return getRouteFallbackLabel(flight);
 }
 
+// Why: format an ISO 8601 timestamp from AeroAPI's schedule fields
+// into a short local-time string ("3:45 PM"). Returns null when the
+// input isn't a valid date so callers can skip rendering.
+//
+// Uses the user's locale + timezone implicitly (toLocaleTimeString
+// with no explicit locale = browser default). For a flight tracker
+// the user is watching from home, that's almost always the right
+// timezone — they want to know when the flight lands in their local
+// frame, not the destination's.
+export function formatScheduleTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.valueOf())) return null;
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+// Why: pick the most-current departure time available for display.
+// Precedence: actual_out > estimated_out > scheduled_out. The label
+// reflects which variant we're showing — "Dep" for an actual or
+// estimated departure (the flight is in motion or about to be), or
+// "Sched" for a still-scheduled future flight (no real-time update
+// yet). Returns null when the flight has no schedule data at all.
+export type ScheduleTimes = {
+  scheduledOut: string | null;
+  estimatedOut: string | null;
+  actualOut: string | null;
+  scheduledIn: string | null;
+  estimatedIn: string | null;
+  actualIn: string | null;
+};
+
+export type ScheduleTimeDisplay = {
+  label: string;
+  time: string;
+};
+
+export function getDepartureTimeDisplay(
+  times: ScheduleTimes
+): ScheduleTimeDisplay | null {
+  const actual = formatScheduleTime(times.actualOut);
+  if (actual) return { label: "Dep", time: actual };
+
+  const estimated = formatScheduleTime(times.estimatedOut);
+  if (estimated) return { label: "Dep", time: estimated };
+
+  const scheduled = formatScheduleTime(times.scheduledOut);
+  if (scheduled) return { label: "Sched", time: scheduled };
+
+  return null;
+}
+
+// Why: same precedence model as departure, but the label shifts to
+// reflect arrival semantics. "Arr" for actual landing (already
+// happened), "ETA" for estimated arrival (in-flight prediction),
+// "Sched" for the original schedule (pre-departure or no
+// estimate yet).
+export function getArrivalTimeDisplay(
+  times: ScheduleTimes
+): ScheduleTimeDisplay | null {
+  const actual = formatScheduleTime(times.actualIn);
+  if (actual) return { label: "Arr", time: actual };
+
+  const estimated = formatScheduleTime(times.estimatedIn);
+  if (estimated) return { label: "ETA", time: estimated };
+
+  const scheduled = formatScheduleTime(times.scheduledIn);
+  if (scheduled) return { label: "Sched", time: scheduled };
+
+  return null;
+}
+
 // Why: when a UI surface has only one labeled slot for the route (a
 // strip row's right-hand cell, a list item, etc.), pair the dt label
 // with the value adaptively so the preposition isn't redundant with

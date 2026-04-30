@@ -90,6 +90,8 @@ type AeroApiFlightRecord = {
   scheduled_out: string | null;
   estimated_out: string | null;
   actual_out: string | null;
+  scheduled_in: string | null;
+  estimated_in: string | null;
   actual_in: string | null;
   origin: {
     code: string | null;
@@ -138,6 +140,15 @@ export type SelectedFlightDetails = {
   registration: string | null;
   registeredOwner: string | null;
   status: string | null;
+  // Why: schedule times from AeroAPI, kept as raw ISO strings. Display
+  // logic in lib/flights/display.ts picks the most-current variant
+  // (actual > estimated > scheduled) and formats the label + time.
+  scheduledOut: string | null;
+  estimatedOut: string | null;
+  actualOut: string | null;
+  scheduledIn: string | null;
+  estimatedIn: string | null;
+  actualIn: string | null;
   track: SelectedFlightTrackPoint[];
 };
 
@@ -1239,6 +1250,12 @@ export async function fetchAeroApiSelectedFlightDetails(
         registration: currentBestMatch.registration ?? null,
         registeredOwner: flight.registeredOwner,
         status: currentBestMatch.status ?? null,
+        scheduledOut: currentBestMatch.scheduled_out ?? null,
+        estimatedOut: currentBestMatch.estimated_out ?? null,
+        actualOut: currentBestMatch.actual_out ?? null,
+        scheduledIn: currentBestMatch.scheduled_in ?? null,
+        estimatedIn: currentBestMatch.estimated_in ?? null,
+        actualIn: currentBestMatch.actual_in ?? null,
         track
       };
 

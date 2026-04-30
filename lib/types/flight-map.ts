@@ -26,6 +26,15 @@ export type SelectedFlightDetailsResponse = {
     registration: string | null;
     registeredOwner: string | null;
     status: string | null;
+    // Schedule times — raw ISO 8601 strings from AeroAPI. Display
+    // helpers pick the most current variant (actual > estimated >
+    // scheduled) per side and format the label + time for the card.
+    scheduledOut: string | null;
+    estimatedOut: string | null;
+    actualOut: string | null;
+    scheduledIn: string | null;
+    estimatedIn: string | null;
+    actualIn: string | null;
     track: Array<{
       altitudeFeet: number | null;
       groundspeedKnots: number | null;
