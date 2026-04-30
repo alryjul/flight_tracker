@@ -304,6 +304,18 @@ export function getOperatorLabel(flight: Flight) {
 export function getOperatorLabelTitle(flight: Flight) {
   const operatorLabel = getOperatorLabel(flight);
 
+  // Why: agency check FIRST — military / public-safety operators can
+  // come through with both an airline string and a flight number set
+  // (US Army C-130 transport flights have an "ARMY1234"-style flight
+  // number that AeroAPI sometimes mirrors into the airline field), so
+  // letting the airline check fire first would mis-tag them. The
+  // agency keyword check is the strongest signal we have for "this is
+  // a government / military operator regardless of the booking-shape
+  // metadata."
+  if (looksLikeAgencyLabel(operatorLabel)) {
+    return "Agency";
+  }
+
   // Why: "Airline" is reserved for scheduled passenger/cargo carriers,
   // not anything-with-a-3-letter-callsign. Real airlines come back with
   // a flightNumber populated (AAL2523 → "AA2523", SWA388 → "WN388",
@@ -312,10 +324,6 @@ export function getOperatorLabelTitle(flight: Flight) {
   // so they correctly fall through to "Operator".
   if (operatorLabel && flight.airline && flight.flightNumber) {
     return "Airline";
-  }
-
-  if (looksLikeAgencyLabel(operatorLabel)) {
-    return "Agency";
   }
 
   // Why: deliberate fallback. We previously tried a fourth "Owner"
