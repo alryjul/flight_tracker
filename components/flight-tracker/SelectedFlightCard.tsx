@@ -36,6 +36,7 @@ import {
   isHelicopterType,
   resolveAircraftType
 } from "@/lib/flights/aircraftTypes";
+import { resolveAirportInfo } from "@/lib/flights/laAirports";
 import type { ComponentProps } from "react";
 import type { Flight } from "@/lib/flights/types";
 import {
@@ -150,6 +151,46 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
   );
 }
 
+// Why: airport code value with a hover tooltip showing the full
+// airport name when it resolves in our KNOWN_AIRPORTS table. Hovering
+// "BUR" shows "Hollywood Burbank"; "LAPD Hooper Heliport" shows
+// "Jay Stephen Hooper Memorial Heliport (Piper Tech, Downtown LA)".
+// Unmapped values (reverse-geocoded neighborhoods, status fallbacks)
+// render as plain text without a tooltip.
+const AIRPORT_VALUE_CLASS = cn(
+  "truncate text-xs font-medium tabular-nums",
+  VALUE_LEADING
+);
+
+function AirportValue({ code }: { code: string }) {
+  const airport = resolveAirportInfo(code);
+
+  if (!airport) {
+    return <p className={AIRPORT_VALUE_CLASS}>{code}</p>;
+  }
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <p
+            className={cn(
+              AIRPORT_VALUE_CLASS,
+              "cursor-help underline decoration-muted-foreground/30 decoration-dotted underline-offset-4"
+            )}
+            tabIndex={0}
+          >
+            {code}
+          </p>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs">
+          <span>{airport.name}</span>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 // Why: route row splits into FROM / TO when both endpoints are known
 // so each side gets its own half-width column for truncation
 // breathing room (long helipad / medical center names like "LAPD
@@ -160,21 +201,17 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
 function FlightRouteRow({ flight }: { flight: Flight }) {
   const origin = flight.origin;
   const destination = flight.destination;
-  const valueClass = cn(
-    "truncate text-xs font-medium tabular-nums",
-    VALUE_LEADING
-  );
 
   if (origin && destination) {
     return (
       <div className="grid grid-cols-2 gap-x-3 gap-y-1">
         <div className="flex min-w-0 flex-col gap-1">
           <p className={LABEL_CLASS}>From</p>
-          <p className={valueClass}>{origin}</p>
+          <AirportValue code={origin} />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
           <p className={LABEL_CLASS}>To</p>
-          <p className={valueClass}>{destination}</p>
+          <AirportValue code={destination} />
         </div>
       </div>
     );
@@ -184,7 +221,7 @@ function FlightRouteRow({ flight }: { flight: Flight }) {
     return (
       <div className="flex min-w-0 flex-col gap-1">
         <p className={LABEL_CLASS}>From</p>
-        <p className={valueClass}>{origin}</p>
+        <AirportValue code={origin} />
       </div>
     );
   }
@@ -193,18 +230,19 @@ function FlightRouteRow({ flight }: { flight: Flight }) {
     return (
       <div className="flex min-w-0 flex-col gap-1">
         <p className={LABEL_CLASS}>To</p>
-        <p className={valueClass}>{destination}</p>
+        <AirportValue code={destination} />
       </div>
     );
   }
 
   // No origin and no destination — fall back to the single-row Route
   // label with whatever fallback string applies (VFR for VFR-squawking
-  // flights, Route pending otherwise).
+  // flights, Route pending otherwise). Plain text — fallback string
+  // isn't an airport, no tooltip to show.
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <p className={LABEL_CLASS}>Route</p>
-      <p className={valueClass}>{getStripRouteLabel(flight)}</p>
+      <p className={AIRPORT_VALUE_CLASS}>{getStripRouteLabel(flight)}</p>
     </div>
   );
 }

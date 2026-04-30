@@ -530,3 +530,30 @@ export function applyAirportCodeDisplayOverride(
   const upper = trimmed.toUpperCase();
   return AIRPORT_CODE_DISPLAY_OVERRIDES[upper] ?? trimmed;
 }
+
+// Why: precomputed map for O(1) lookup by iata field (which is the
+// display string we put in flight.origin / flight.destination — e.g.,
+// "BUR", "LAX", "LAPD Hooper Heliport"). Reverse-geocoded
+// neighborhood labels and status strings ("VFR", "Route pending")
+// won't match and resolveAirportInfo returns null for them.
+const AIRPORT_BY_DISPLAY_KEY = new Map<string, Airport>(
+  KNOWN_AIRPORTS.map((airport) => [airport.iata.toUpperCase(), airport])
+);
+
+// Why: looks up an airport entry by the display value used in
+// flight.origin / flight.destination. Returns the full Airport
+// (including the descriptive name field) when matched, or null
+// when the value isn't a known airport (helipad reverse-geocode,
+// status placeholder, or just an airport we haven't curated).
+//
+// Used by route-display tooltips to surface the long-form name on
+// hover ("BUR" → "Hollywood Burbank", "LAPD Hooper Heliport" → "Jay
+// Stephen Hooper Memorial Heliport (Piper Tech, Downtown LA)").
+export function resolveAirportInfo(
+  code: string | null | undefined
+): Airport | null {
+  if (!code) return null;
+  const trimmed = code.trim();
+  if (trimmed.length === 0) return null;
+  return AIRPORT_BY_DISPLAY_KEY.get(trimmed.toUpperCase()) ?? null;
+}
