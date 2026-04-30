@@ -56,6 +56,11 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { AreaConfigPopover } from "@/components/flight-tracker/AreaConfigPopover";
 import { FlightList } from "@/components/flight-tracker/FlightList";
 import { MapCanvas } from "@/components/flight-tracker/MapCanvas";
+import {
+  DEFAULT_MAP_LABEL_VISIBILITY,
+  MapLayersPopover,
+  type MapLabelVisibility
+} from "@/components/flight-tracker/MapLayersPopover";
 import { MapHoverCard } from "@/components/flight-tracker/MapHoverCard";
 import { SelectedFlightCard } from "@/components/flight-tracker/SelectedFlightCard";
 import { SourceStatusFooter } from "@/components/flight-tracker/SourceStatusFooter";
@@ -117,6 +122,9 @@ export function FlightMap() {
   const [homeBase, setHomeBase] = useState<HomeBaseCenter>(APP_CONFIG.center);
   const [radiusMiles, setRadiusMiles] = useState<number>(APP_CONFIG.radiusMiles);
   const [areaFlyoutOpen, setAreaFlyoutOpen] = useState(false);
+  const [mapLabelVisibility, setMapLabelVisibility] = useState<MapLabelVisibility>(
+    DEFAULT_MAP_LABEL_VISIBILITY
+  );
   const [areaDraft, setAreaDraft] = useState({
     latitude: APP_CONFIG.center.latitude.toFixed(4),
     longitude: APP_CONFIG.center.longitude.toFixed(4),
@@ -1283,6 +1291,7 @@ export function FlightMap() {
         selectedRenderedPositionRef={selectedRenderedPositionRef}
         onSelectFlight={setSelectedFlightId}
         onHoverFlight={setHoveredFlight}
+        mapLabelVisibility={mapLabelVisibility}
       />
 
       <Sidebar variant="floating" side="left" collapsible="offcanvas">
@@ -1345,14 +1354,18 @@ export function FlightMap() {
       <MapHoverCard hoveredFlight={hoveredFlight} hoveredFlightDisplay={hoveredFlightDisplay} />
       <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
 
-      {/* Why: floating area config button sits to the LEFT of
-          MapLibre's NavigationControl zoom buttons. MapLibre's group
-          is ~30px wide with a 10px right margin (occupies right:10px
-          to right:40px). Place our pill at right-12 (48px) for ~8px
-          horizontal gap. bottom-2.5 (10px) aligns the pill's bottom
-          with the zoom group's bottom edge so they read as a
-          horizontal pair anchored to the viewport corner. */}
-      <div className="fixed right-12 bottom-2.5 z-20">
+      {/* Why: floating map toolbar — one container holds both the
+          layer-toggle button and the area-config button so they read
+          as a related pair (both modify "what the map shows"), with
+          MapLibre's zoom buttons sitting separately to the right of
+          this toolbar at the viewport corner. right-12 anchors the
+          toolbar's right edge 48px from the viewport right, clearing
+          the ~30px-wide zoom-control stack at right:10. */}
+      <div className="fixed right-12 bottom-2.5 z-20 flex items-center gap-2">
+        <MapLayersPopover
+          visibility={mapLabelVisibility}
+          onVisibilityChange={setMapLabelVisibility}
+        />
         <AreaConfigPopover
           open={areaFlyoutOpen}
           onOpenChange={handleAreaPopoverOpenChange}

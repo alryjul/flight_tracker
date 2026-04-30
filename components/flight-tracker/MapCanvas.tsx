@@ -39,8 +39,55 @@ import {
   STRIP_HOVER_ECHO_DURATION_MS,
   STRIP_HOVER_ECHO_GROWTH
 } from "@/lib/config/flight-map-constants";
+import type { MapLabelVisibility } from "@/components/flight-tracker/MapLayersPopover";
 
 type MapMode = "light" | "dark";
+
+// Why: classify a basemap layer (Carto Positron / Dark Matter) into one
+// of our user-toggleable categories — placeLabels (cities, towns,
+// suburbs), roadLabels (street/highway names + house numbers),
+// poiLabels (businesses, airports, transit). Returns null for layers
+// that don't fit a category (water labels, boundaries, base geometry,
+// our own custom flight layers) — those keep their default
+// visibility regardless of toggle state.
+//
+// Carto's layer ID convention is mostly "<category>_<subtype>" with
+// some hyphens — this matcher uses substring includes for resilience
+// across the slight ID variations between the light and dark styles.
+function getLabelLayerCategory(
+  layerId: string,
+  layerType: string
+): keyof MapLabelVisibility | null {
+  if (layerType !== "symbol") return null;
+  const id = layerId.toLowerCase();
+  if (id.includes("place")) return "placeLabels";
+  if (id.includes("road") && id.includes("label")) return "roadLabels";
+  if (id.includes("housenum")) return "roadLabels";
+  if (id.includes("poi")) return "poiLabels";
+  if (id.includes("airport") && id.includes("label")) return "poiLabels";
+  if (id.includes("transit") && id.includes("label")) return "poiLabels";
+  return null;
+}
+
+// Why: walk every layer in the current basemap style and toggle its
+// visibility based on the user's category preferences. Called on
+// initial map load, after every setStyle (theme switch wipes layer
+// properties), and whenever the visibility prop changes.
+function applyMapLabelVisibility(
+  map: MapLibreMap,
+  visibility: MapLabelVisibility
+) {
+  const style = map.getStyle();
+  if (!style.layers) return;
+  for (const layer of style.layers) {
+    const category = getLabelLayerCategory(layer.id, layer.type);
+    if (!category) continue;
+    const target = visibility[category] ? "visible" : "none";
+    // setLayoutProperty no-ops if the value is unchanged, so safe to
+    // call eagerly without diffing.
+    map.setLayoutProperty(layer.id, "visibility", target);
+  }
+}
 
 // Why: avoid a cold-start double-style-load for dark-mode users. The
 // next-themes hook returns undefined on first render; if we default to
@@ -379,6 +426,7 @@ type MapCanvasProps = {
   selectedRenderedPositionRef: React.MutableRefObject<{ latitude: number; longitude: number } | null>;
   onSelectFlight: (id: string) => void;
   onHoverFlight: (state: HoveredFlightState | null) => void;
+  mapLabelVisibility: MapLabelVisibility;
 };
 
 export function MapCanvas({
@@ -401,7 +449,8 @@ export function MapCanvas({
   selectedMetadataByIdRef,
   selectedRenderedPositionRef,
   onSelectFlight,
-  onHoverFlight
+  onHoverFlight,
+  mapLabelVisibility
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -431,6 +480,12 @@ export function MapCanvas({
   // useEffect calls setStyle() on its first run (when mapReady flips to
   // true), wiping the just-added flight/track sources for no reason.
   const appliedMapModeRef = useRef<MapMode>(mapMode);
+  // Why: ref-mirror so the map-creation effect (which doesn't re-run on
+  // visibility changes) can read the latest visibility values inside
+  // its load + style.load callbacks. The dedicated effect below
+  // handles eager re-application when the prop actually changes.
+  const mapLabelVisibilityRef = useRef<MapLabelVisibility>(mapLabelVisibility);
+  mapLabelVisibilityRef.current = mapLabelVisibility;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -458,6 +513,11 @@ export function MapCanvas({
         onSelectFlight,
         onHoverFlight
       });
+      // Why: apply current label visibility on initial load. Without
+      // this the user toggling labels off, then refreshing, would see
+      // them all flash on briefly before the prop-driven effect
+      // below catches up.
+      applyMapLabelVisibility(map, mapLabelVisibilityRef.current);
       setMapReady(true);
     });
 
@@ -501,6 +561,11 @@ export function MapCanvas({
         onSelectFlight,
         onHoverFlight
       });
+      // Why: setStyle wipes per-layer visibility along with our custom
+      // sources/layers. Re-apply user toggles after the new basemap
+      // style finishes loading so dark-mode users keep their hidden
+      // labels hidden across theme switches.
+      applyMapLabelVisibility(map, mapLabelVisibilityRef.current);
     };
     map.once("style.load", handleStyleLoad);
     return () => {
@@ -511,6 +576,15 @@ export function MapCanvas({
     // stable ref object owned by the orchestrator.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapMode, mapReady]);
+
+  // Why: re-apply label visibility whenever the user toggles a category.
+  // The setLayoutProperty calls inside applyMapLabelVisibility are
+  // no-ops when the value is unchanged, so this is cheap to run on
+  // every prop change.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    applyMapLabelVisibility(mapRef.current, mapLabelVisibility);
+  }, [mapLabelVisibility, mapReady]);
 
   useEffect(() => {
     const homeBaseSource = mapRef.current?.getSource("home-base") as GeoJSONSource | undefined;
