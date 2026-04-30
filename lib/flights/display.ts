@@ -18,12 +18,18 @@ export function getIdentifierLabel(flight: Flight) {
   return "Callsign";
 }
 
+// Why: the secondary line under the card title exists to show the ATC
+// callsign alongside the IATA-style flight number when they differ —
+// "WN1184" big, "SWA1184" small underneath, the dispatcher view next to
+// the boarding-pass view. When the two strings happen to be identical
+// (charter ops where AeroAPI's ident_iata field echoes the ICAO callsign
+// like "PGR1390 / PGR1390", or any flight where there's no IATA mapping
+// so callsign IS the primary), rendering the same value twice was a
+// duplicate, not a clarification. Compare against the primary directly
+// so the dedup applies regardless of which field filled it in.
 export function getSecondaryIdentifier(flight: Flight) {
-  if (flight.flightNumber) {
-    return flight.callsign;
-  }
-
-  if (flight.registration && flight.callsign !== flight.registration) {
+  const primary = getPrimaryIdentifier(flight);
+  if (flight.callsign && flight.callsign !== primary) {
     return flight.callsign;
   }
 
