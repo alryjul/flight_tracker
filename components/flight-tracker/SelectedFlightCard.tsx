@@ -150,12 +150,19 @@ function SelectedFlightCardImpl({
           </div>
         </div>
         {/* Route as second-tier emphasis directly under the title.
-            getStripRouteLabel always returns something usable —
+            Mirrors the FLIGHT / REGISTRATION block's dt+title structure
+            so the ROUTE label visually anchors the route line the same
+            way. getStripRouteLabel always returns something usable —
             "BUR to SJC" / "From SMO" / "Route pending" / "VFR" — so
             this slot never goes blank. */}
-        <p className="truncate text-sm font-medium tabular-nums">
-          {getStripRouteLabel(flight)}
-        </p>
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Route
+          </p>
+          <p className="truncate text-sm font-medium tabular-nums">
+            {getStripRouteLabel(flight)}
+          </p>
+        </div>
       </CardHeader>
       <CardContent className="px-3">
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
