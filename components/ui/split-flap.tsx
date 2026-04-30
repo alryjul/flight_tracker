@@ -288,7 +288,15 @@ export function SplitFlapDisplay({
         // Without this the cascade breaks here at "inline-flex"
         // (transparent default) and cells render with no panel
         // background.
-        "inline-flex select-none items-baseline gap-[0.1ch] bg-inherit tabular-nums text-inherit",
+        //
+        // font-mono pulls Geist Mono via the --font-mono variable.
+        // Critical for split-flap because each character cell is
+        // sized to 1ch (one zero-width) and a proportional font
+        // would render different glyphs at different widths
+        // ("M" much wider than "1"), either inflating cells to fit
+        // the widest glyph or leaving narrower cells half-empty.
+        // Mono's uniform grid keeps every cell visually identical.
+        "inline-flex select-none items-baseline gap-[0.1ch] bg-inherit font-mono tabular-nums text-inherit",
         className
       )}
       style={styleVars}
