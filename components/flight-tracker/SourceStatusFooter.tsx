@@ -8,10 +8,9 @@ type SourceStatusFooterProps = {
 
 function SourceStatusFooterImpl({ dataSource }: SourceStatusFooterProps) {
   return (
-    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-      <span className="uppercase tracking-wider">Source</span>
-      <span className="truncate tabular-nums">{dataSource}</span>
-    </div>
+    <p className="truncate text-[10px] text-muted-foreground">
+      Source: <span className="tabular-nums">{dataSource}</span>
+    </p>
   );
 }
 
