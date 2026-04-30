@@ -65,12 +65,17 @@ type SelectedFlightCardProps = {
 // styling. Pinning leading-tight (vs. the cascaded text-xs/relaxed
 // 1.625 from Card) gives all labels a 12.5px line-box for 10px text —
 // no extra "leading" space below the label glyphs that would otherwise
-// inflate the visible gap to the value below. font-mono pulls Geist
-// Mono in via the --font-mono CSS variable, giving the labels a
-// distinct "this is metadata" texture that reads as a different
-// register than the values below.
+// inflate the visible gap to the value below.
 const LABEL_CLASS =
-  "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground font-mono";
+  "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground";
+
+// Why: shared treatment for data values (everything that isn't a
+// label or prose). Geist Mono gives them a distinct "this is data"
+// texture that contrasts with Inter labels above each value. Applied
+// inline via cn() at each value site so Tailwind picks up the
+// font-mono utility without conflicting with per-element overrides
+// like truncate, font-medium, or specific text sizes.
+const VALUE_FONT = "font-mono";
 
 // Why: severity-to-visual mapping for the status badge. Lives at the
 // component layer (not display.ts) because it's a styling concern; the
@@ -121,7 +126,7 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
 
   if (!callsignDiffersFromPrimary && !radioCall) {
     return (
-      <CardTitle className="text-lg leading-tight tabular-nums">
+      <CardTitle className={cn("text-lg leading-tight tabular-nums", VALUE_FONT)}>
         {primary}
       </CardTitle>
     );
@@ -134,7 +139,12 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
           {/* Why: dotted underline as the visual affordance for "this
               has more info on hover". Keeps the title clean while
               hinting at interactivity. cursor-help reinforces it. */}
-          <CardTitle className="cursor-help text-lg leading-tight tabular-nums underline decoration-muted-foreground/40 decoration-dotted underline-offset-4">
+          <CardTitle
+            className={cn(
+              "cursor-help text-lg leading-tight tabular-nums underline decoration-muted-foreground/40 decoration-dotted underline-offset-4",
+              VALUE_FONT
+            )}
+          >
             {primary}
           </CardTitle>
         </TooltipTrigger>
@@ -165,7 +175,8 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
 // render as plain text without a tooltip.
 const AIRPORT_VALUE_CLASS = cn(
   "truncate text-xs font-medium tabular-nums",
-  VALUE_LEADING
+  VALUE_LEADING,
+  VALUE_FONT
 );
 
 function AirportValue({ code }: { code: string }) {
@@ -208,7 +219,12 @@ function ScheduleTimeLine({
 }) {
   if (!display) return null;
   return (
-    <p className="truncate text-[10px] leading-tight tabular-nums text-muted-foreground">
+    <p
+      className={cn(
+        "truncate text-[10px] leading-tight tabular-nums text-muted-foreground",
+        VALUE_FONT
+      )}
+    >
       <span className="text-foreground/70">{display.label}</span>{" "}
       {display.time}
     </p>
@@ -306,7 +322,7 @@ function AircraftTypeBadge({
   // No mapping → raw ICAO already shown, no tooltip content to add.
   if (!resolved) {
     return (
-      <Badge variant="secondary" className="text-[10px]">
+      <Badge variant="secondary" className={cn("text-[10px]", VALUE_FONT)}>
         <Icon aria-hidden="true" />
         {label}
       </Badge>
@@ -319,7 +335,7 @@ function AircraftTypeBadge({
         <TooltipTrigger asChild>
           <Badge
             variant="secondary"
-            className="cursor-help text-[10px]"
+            className={cn("cursor-help text-[10px]", VALUE_FONT)}
             tabIndex={0}
           >
             <Icon aria-hidden="true" />
@@ -409,7 +425,7 @@ function SelectedFlightCardImpl({
             {meaningfulStatus && statusBadgeStyle ? (
               <Badge
                 variant={statusBadgeStyle.variant}
-                className={cn("text-[10px]", statusBadgeStyle.className)}
+                className={cn("text-[10px]", statusBadgeStyle.className, VALUE_FONT)}
               >
                 {meaningfulStatus}
               </Badge>
@@ -439,7 +455,7 @@ function SelectedFlightCardImpl({
               )}
             >
               <dt className={LABEL_CLASS}>{getOperatorLabelTitle(flight)}</dt>
-              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+              <dd className={cn("truncate font-medium", VALUE_LEADING, VALUE_FONT)}>
                 {operatorLabel}
               </dd>
             </div>
@@ -455,7 +471,8 @@ function SelectedFlightCardImpl({
               <dd
                 className={cn(
                   "truncate font-medium tabular-nums",
-                  VALUE_LEADING
+                  VALUE_LEADING,
+                  VALUE_FONT
                 )}
               >
                 {flight.registration}
@@ -465,7 +482,7 @@ function SelectedFlightCardImpl({
           {showOwner ? (
             <div className="col-span-2 flex min-w-0 flex-col gap-1">
               <dt className={LABEL_CLASS}>Owner</dt>
-              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+              <dd className={cn("truncate font-medium", VALUE_LEADING, VALUE_FONT)}>
                 {ownerLabel}
               </dd>
             </div>
@@ -475,7 +492,7 @@ function SelectedFlightCardImpl({
         <dl className="grid grid-cols-3 gap-2 text-xs">
           <div className="flex flex-col gap-1">
             <dt className={LABEL_CLASS}>Distance</dt>
-            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
+            <dd className={cn("font-medium tabular-nums", VALUE_LEADING, VALUE_FONT)}>
               {formatDistanceMiles(
                 getDistanceFromHomeBaseMiles(flight, homeBase)
               )}
@@ -486,7 +503,8 @@ function SelectedFlightCardImpl({
             <dd
               className={cn(
                 "flex items-baseline gap-1 font-medium tabular-nums",
-                VALUE_LEADING
+                VALUE_LEADING,
+                VALUE_FONT
               )}
             >
               {formatAltitude(
@@ -511,7 +529,8 @@ function SelectedFlightCardImpl({
             <dd
               className={cn(
                 "flex items-baseline gap-1 font-medium tabular-nums",
-                VALUE_LEADING
+                VALUE_LEADING,
+                VALUE_FONT
               )}
             >
               {formatAirspeed(flight.groundspeedKnots)}
