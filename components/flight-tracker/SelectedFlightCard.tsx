@@ -146,7 +146,7 @@ export function SelectedFlightCard({
                   aria-hidden="true"
                   className={cn(
                     "text-[10px]",
-                    altitudeTrend === "up" ? "text-emerald-500" : "text-red-500"
+                    altitudeTrend === "up" ? "text-emerald-500" : "text-amber-500"
                   )}
                 >
                   {altitudeTrend === "up" ? "↑" : "↓"}
@@ -165,7 +165,7 @@ export function SelectedFlightCard({
                   aria-hidden="true"
                   className={cn(
                     "text-[10px]",
-                    airspeedTrend === "up" ? "text-emerald-500" : "text-red-500"
+                    airspeedTrend === "up" ? "text-emerald-500" : "text-amber-500"
                   )}
                 >
                   {airspeedTrend === "up" ? "↑" : "↓"}

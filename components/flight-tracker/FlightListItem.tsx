@@ -57,7 +57,7 @@ export function FlightListItem({
               aria-label={rankChange > 0 ? "Moved closer" : "Moved farther"}
               className={cn(
                 "text-[10px] font-medium",
-                rankChange > 0 ? "text-emerald-500" : "text-muted-foreground"
+                rankChange > 0 ? "text-emerald-500" : "text-amber-500"
               )}
               title={rankChange > 0 ? "Moved closer" : "Moved farther"}
             >
