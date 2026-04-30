@@ -19,7 +19,6 @@
 // within them, so a 3-cell airport code in the same panel as a 7-cell
 // flight number both look "in their slot" rather than left-aligned.
 
-import { useMemo } from "react";
 import { Helicopter, Plane } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -63,41 +62,6 @@ const VALUE_LEADING = "leading-tight";
 const FLIGHT_CELL_LENGTH = 7;
 const AIRPORT_CELL_LENGTH = 4;
 
-// Why: bearing from home base to the flight, mapped to a 16-point compass.
-function getCompassBearingLabel(
-  flight: Flight,
-  home: HomeBaseCenter
-): string | null {
-  const φ1 = (home.latitude * Math.PI) / 180;
-  const φ2 = (flight.latitude * Math.PI) / 180;
-  const Δλ = ((flight.longitude - home.longitude) * Math.PI) / 180;
-  const y = Math.sin(Δλ) * Math.cos(φ2);
-  const x =
-    Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-  const θ = Math.atan2(y, x);
-  const degrees = ((θ * 180) / Math.PI + 360) % 360;
-  const points = [
-    "N",
-    "NNE",
-    "NE",
-    "ENE",
-    "E",
-    "ESE",
-    "SE",
-    "SSE",
-    "S",
-    "SSW",
-    "SW",
-    "WSW",
-    "W",
-    "WNW",
-    "NW",
-    "NNW"
-  ];
-  const idx = Math.round(degrees / 22.5) % 16;
-  return points[idx] ?? "N";
-}
-
 type AmbientViewProps = {
   flight: Flight | null;
   isSelected: boolean;
@@ -108,10 +72,6 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
   const distanceMiles = flight
     ? getDistanceFromHomeBaseMiles(flight, homeBase)
     : null;
-  const bearing = useMemo(
-    () => (flight ? getCompassBearingLabel(flight, homeBase) : null),
-    [flight, homeBase]
-  );
 
   return (
     <AmbientShell>
@@ -125,16 +85,6 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
         <div className="flex min-w-0 flex-col gap-1">
           <p className={LABEL_CLASS}>
             {isSelected ? "Selected" : "Nearest"}
-            {flight && bearing ? (
-              // Why: bearing only, no distance. Distance is the
-              // primary stat in the bottom Distance/Altitude/Airspeed
-              // row; repeating it here would just be noise. Bearing
-              // alone gives the "where to look up" directional cue
-              // that pairs with the Nearest label.
-              <span className="ml-2 normal-case tracking-normal text-foreground/60">
-                {bearing}
-              </span>
-            ) : null}
           </p>
         </div>
         {flight ? (
@@ -192,9 +142,15 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 // reference theme-aware semantic tokens (bg-card, bg-background,
 // text-foreground, etc.) and they resolve to airport-board colors.
 function AmbientShell({ children }: { children: React.ReactNode }) {
+  // Why: top-left, 20em wide — mirrors the sidebar's position and
+  // approximate width (sidebar is also 20rem). When ambient mode
+  // collapses the sidebar offcanvas, this widget visually replaces
+  // it in the same screen real estate. Forced-dark via the `dark`
+  // wrapper so theme tokens resolve to the airport-board palette
+  // regardless of user theme.
   return (
-    <div className="dark pointer-events-none fixed top-4 left-1/2 z-30 -translate-x-1/2">
-      <div className="pointer-events-auto flex w-[28rem] flex-col gap-3 rounded-lg border border-border bg-card px-4 py-4 text-card-foreground shadow-2xl">
+    <div className="dark pointer-events-none fixed top-4 left-4 z-30 w-[20em] max-w-[calc(100vw-2rem)]">
+      <div className="pointer-events-auto flex flex-col gap-3 rounded-lg border border-border bg-card px-4 py-4 text-card-foreground shadow-2xl">
         {children}
       </div>
     </div>
@@ -205,21 +161,33 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
 // as SelectedFlightCard's FlightRouteRow — which panels render
 // depends on what data is available. FLIGHT is always present;
 // FROM/TO/ROUTE adapt based on origin/destination availability.
+//
+// FLIGHT panel is always pinned to 1/3 of the card width via
+// grid-cols-[1fr_2fr] (or grid-cols-3 when 3 panels exist) so the
+// flight number's panel size doesn't grow when route panels are
+// missing — keeps the visual rhythm consistent across selection
+// changes. The 2/3 right-hand side either splits in two (FROM/TO)
+// or carries a single wider panel (FROM-only, TO-only, ROUTE
+// fallback) depending on what data we have.
 function RouteGrid({ flight }: { flight: Flight }) {
   const origin = flight.origin;
   const destination = flight.destination;
   const flightValue = getPrimaryIdentifier(flight).toUpperCase();
 
-  // Both endpoints — three panels.
+  const flightPanel = (
+    <HeroPanel
+      label="Flight"
+      value={flightValue}
+      cells={FLIGHT_CELL_LENGTH}
+      charSet="alphanumeric"
+    />
+  );
+
+  // Both endpoints — three panels at equal 1/3 widths each.
   if (origin && destination) {
     return (
       <div className="grid grid-cols-3 gap-2">
-        <HeroPanel
-          label="Flight"
-          value={flightValue}
-          cells={FLIGHT_CELL_LENGTH}
-          charSet="alphanumeric"
-        />
+        {flightPanel}
         <HeroPanel
           label="From"
           value={isShortAirportCode(origin) ? origin : ""}
@@ -238,16 +206,11 @@ function RouteGrid({ flight }: { flight: Flight }) {
     );
   }
 
-  // Origin only — two panels (FLIGHT / FROM).
+  // Origin only — FLIGHT (1/3) + FROM (2/3).
   if (origin) {
     return (
-      <div className="grid grid-cols-2 gap-2">
-        <HeroPanel
-          label="Flight"
-          value={flightValue}
-          cells={FLIGHT_CELL_LENGTH}
-          charSet="alphanumeric"
-        />
+      <div className="grid grid-cols-[1fr_2fr] gap-2">
+        {flightPanel}
         <HeroPanel
           label="From"
           value={isShortAirportCode(origin) ? origin : ""}
@@ -259,16 +222,11 @@ function RouteGrid({ flight }: { flight: Flight }) {
     );
   }
 
-  // Destination only — two panels (FLIGHT / TO).
+  // Destination only — FLIGHT (1/3) + TO (2/3).
   if (destination) {
     return (
-      <div className="grid grid-cols-2 gap-2">
-        <HeroPanel
-          label="Flight"
-          value={flightValue}
-          cells={FLIGHT_CELL_LENGTH}
-          charSet="alphanumeric"
-        />
+      <div className="grid grid-cols-[1fr_2fr] gap-2">
+        {flightPanel}
         <HeroPanel
           label="To"
           value={isShortAirportCode(destination) ? destination : ""}
@@ -280,19 +238,13 @@ function RouteGrid({ flight }: { flight: Flight }) {
     );
   }
 
-  // Neither endpoint — show FLIGHT plus a fallback ROUTE panel
-  // (VFR for VFR-squawking flights, Route pending otherwise).
-  // Mirrors FlightRouteRow's no-route fallback.
+  // Neither endpoint — FLIGHT (1/3) + ROUTE fallback (2/3).
+  // Mirrors FlightRouteRow's no-route fallback (VFR / Route pending).
   const fallbackText = getStripRouteLabel(flight);
   const fallbackFitsSplitFlap = fallbackText.length <= AIRPORT_CELL_LENGTH;
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <HeroPanel
-        label="Flight"
-        value={flightValue}
-        cells={FLIGHT_CELL_LENGTH}
-        charSet="alphanumeric"
-      />
+    <div className="grid grid-cols-[1fr_2fr] gap-2">
+      {flightPanel}
       <HeroPanel
         label="Route"
         value={fallbackFitsSplitFlap ? fallbackText : ""}
@@ -326,16 +278,21 @@ function HeroPanel({
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <p className={LABEL_CLASS}>{label}</p>
-      <div className="flex h-12 items-center justify-center overflow-hidden rounded-md bg-background px-2 text-foreground shadow-inner ring-1 ring-border/30">
+      <div className="flex h-10 items-center justify-center overflow-hidden rounded-md bg-background px-1.5 text-foreground shadow-inner ring-1 ring-border/30">
         {fallback ? (
           // Why: long readable names (LAPD Hooper Heliport, Cedars-
           // Sinai Medical Center) don't fit in a 4-cell split-flap —
           // fall back to plain text in the same panel slot. The
-          // fixed h-12 keeps panel heights aligned across the row.
-          <p className="truncate text-sm font-semibold leading-tight tracking-wider">
+          // fixed h-10 keeps panel heights aligned across the row.
+          <p className="truncate text-xs font-semibold leading-tight tracking-wider">
             {fallback}
           </p>
         ) : (
+          // Why: text-base scales the split-flap cells down to ~10px
+          // character width, fitting a 7-cell flight number panel
+          // (FLIGHT/FROM/TO grid) inside the 20em-wide card with
+          // breathing room. text-xl was too wide and pushed cells
+          // off the edge.
           <SplitFlapDisplay
             value={value}
             charSet={charSet}
@@ -343,7 +300,7 @@ function HeroPanel({
             padDirection="end"
             cycleMs={45}
             flipMs={300}
-            className="text-xl font-semibold tracking-wider"
+            className="text-base font-semibold tracking-wider"
           />
         )}
       </div>
