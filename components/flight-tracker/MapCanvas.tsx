@@ -46,14 +46,27 @@ type MapMode = "light" | "dark";
 // Why: classify a basemap layer (Carto Positron / Dark Matter) into one
 // of our user-toggleable categories — placeLabels (cities, towns,
 // suburbs), roadLabels (street/highway names + house numbers),
-// poiLabels (businesses, airports, transit). Returns null for layers
+// poiLabels (stadiums, parks, businesses). Returns null for layers
 // that don't fit a category (water labels, boundaries, base geometry,
 // our own custom flight layers) — those keep their default
 // visibility regardless of toggle state.
 //
-// Carto's layer ID convention is mostly "<category>_<subtype>" with
-// some hyphens — this matcher uses substring includes for resilience
-// across the slight ID variations between the light and dark styles.
+// Carto's actual layer ID conventions (verified against
+// positron-gl-style/style.json and dark-matter-gl-style/style.json):
+//   place:    place_hamlet / _suburbs / _villages / _town / _city_*
+//             / _country_* / _state / _continent / _capital_dot_*
+//   road:     roadname_minor / _sec / _pri / _major  (NOT
+//             "road_label_*" as I'd assumed in v1 — that miss is why
+//             toggling road labels appeared to do nothing)
+//             housenumber
+//   poi:      poi_stadium / poi_park  (Positron only exposes a
+//             handful — most "POIs" aren't actually labeled in this
+//             style, so toggling has limited visible effect at the
+//             city-scale zooms the app uses)
+//
+// Substring matching is intentional — survives small style version
+// changes and accommodates the "roadname" / "road_label" / similar
+// patterns other Carto styles use.
 function getLabelLayerCategory(
   layerId: string,
   layerType: string
@@ -61,6 +74,7 @@ function getLabelLayerCategory(
   if (layerType !== "symbol") return null;
   const id = layerId.toLowerCase();
   if (id.includes("place")) return "placeLabels";
+  if (id.includes("roadname")) return "roadLabels";
   if (id.includes("road") && id.includes("label")) return "roadLabels";
   if (id.includes("housenum")) return "roadLabels";
   if (id.includes("poi")) return "poiLabels";
