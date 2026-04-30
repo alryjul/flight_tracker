@@ -1338,24 +1338,32 @@ export function FlightMap() {
         </SidebarContent>
 
         <SidebarFooter className="gap-2 px-3 py-2">
-          <AreaConfigPopover
-            open={areaFlyoutOpen}
-            onOpenChange={handleAreaPopoverOpenChange}
-            radiusMiles={radiusMiles}
-            areaDraft={areaDraft}
-            areaError={areaError}
-            isLocating={isLocating}
-            onDraftChange={setAreaDraft}
-            onUseMapCenter={setDraftFromMapCenter}
-            onUseLocation={useCurrentLocation}
-            onApply={applyAreaDraft}
-          />
           <SourceStatusFooter dataSource={dataSource} />
         </SidebarFooter>
       </Sidebar>
 
       <MapHoverCard hoveredFlight={hoveredFlight} hoveredFlightDisplay={hoveredFlightDisplay} />
       <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
+
+      {/* Why: floating area config button sits above MapLibre's zoom
+          controls (bottom-right corner of map). bottom-20 = 80px from
+          bottom — clears the ~70px tall NavigationControl group plus
+          a small gap. Right-2.5 (10px) matches MapLibre's default
+          control margin so the buttons stack vertically aligned. */}
+      <div className="fixed right-2.5 bottom-20 z-20">
+        <AreaConfigPopover
+          open={areaFlyoutOpen}
+          onOpenChange={handleAreaPopoverOpenChange}
+          radiusMiles={radiusMiles}
+          areaDraft={areaDraft}
+          areaError={areaError}
+          isLocating={isLocating}
+          onDraftChange={setAreaDraft}
+          onUseMapCenter={setDraftFromMapCenter}
+          onUseLocation={useCurrentLocation}
+          onApply={applyAreaDraft}
+        />
+      </div>
     </>
   );
 }

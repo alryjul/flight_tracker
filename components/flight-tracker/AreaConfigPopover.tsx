@@ -1,5 +1,6 @@
 "use client";
 
+import { MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,12 +36,24 @@ export function AreaConfigPopover({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="w-full justify-between">
-          <span className="text-xs text-muted-foreground">Area</span>
-          <strong className="text-xs tabular-nums">{radiusMiles} mi</strong>
+        {/* Why: floating pill button styled to live on the map (above
+            MapLibre's zoom controls), not inside a sidebar row. Icon
+            + current radius reads as both an action ("change area")
+            and a status ("currently set to N mi"). bg-card / shadow-md
+            keep it visible against both light and dark basemaps. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 gap-1.5 bg-card px-2.5 shadow-md"
+          aria-label={`Configure search area (currently ${radiusMiles} miles)`}
+        >
+          <MapPin className="size-4" aria-hidden="true" />
+          <span className="text-xs font-medium tabular-nums">
+            {radiusMiles} mi
+          </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" className="w-72">
+      <PopoverContent side="left" align="end" className="w-72">
         <div className="grid gap-3">
           <div className="grid grid-cols-2 gap-2">
             <div className="grid gap-1">
