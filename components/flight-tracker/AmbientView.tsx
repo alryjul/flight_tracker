@@ -115,13 +115,25 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 
   return (
     <AmbientShell>
-      {/* Header — Nearest/Selected + bearing/distance */}
-      <div className="flex items-baseline justify-between gap-3">
-        <p className={LABEL_CLASS}>{isSelected ? "Selected" : "Nearest"}</p>
-        {flight && bearing && distanceMiles != null ? (
-          <p className="text-[10px] tabular-nums uppercase tracking-wider text-muted-foreground">
-            {formatDistanceMiles(distanceMiles)} · {bearing}
+      {/* Header — mirrors SelectedFlightCard's pattern of "small dt
+          label + meta on left, badges pinned top-right via
+          items-start." For ambient, the dt is "NEAREST" with bearing
+          + distance inline; the aircraft badge sits top-right.
+          When no flight in range, header still shows the dt with
+          a waiting note in place of the meta. */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className={LABEL_CLASS}>
+            {isSelected ? "Selected" : "Nearest"}
+            {flight && bearing && distanceMiles != null ? (
+              <span className="ml-2 normal-case tracking-normal text-foreground/60 tabular-nums">
+                {formatDistanceMiles(distanceMiles)} · {bearing}
+              </span>
+            ) : null}
           </p>
+        </div>
+        {flight ? (
+          <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
         ) : null}
       </div>
 
@@ -143,18 +155,11 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 
           <Separator className="bg-border/60" />
 
-          {/* Aircraft type badge inline with the supporting info dl.
-              The badge alone shows the short name (737-800); full
-              manufacturer name lives in the badge's title attribute
-              on hover. SelectedFlightCard uses the same pattern —
-              one badge, tooltip-for-detail, no repetition in the
-              body. */}
-          <div className="flex items-start gap-3">
-            <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
-            <div className="min-w-0 flex-1">
-              <InfoStack flight={flight} />
-            </div>
-          </div>
+          {/* Operator / Registration / Owner — same dl as
+              SelectedFlightCard's CardContent block. The badge is
+              already top-right of the header above, no inline
+              copy here. */}
+          <InfoStack flight={flight} />
 
           <Separator className="bg-border/60" />
 
