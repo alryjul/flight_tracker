@@ -267,9 +267,13 @@ export const AIRCRAFT_TYPES_BY_ICAO: Readonly<Record<string, AircraftType>> = {
   S76: heli("S-76", "Sikorsky S-76"),
 
   // ── Helicopters — Robinson ──
-  R22: heli("Robinson R22", "Robinson R22"),
-  R44: heli("Robinson R44", "Robinson R44"),
-  R66: heli("Robinson R66", "Robinson R66"),
+  // Why: "R22" / "R44" / "R66" are unambiguous in the helicopter world
+  // — no other manufacturer uses those designators. Drop "Robinson"
+  // from the badge for brevity; the full name in the tooltip still
+  // carries the manufacturer.
+  R22: heli("R22", "Robinson R22"),
+  R44: heli("R44", "Robinson R44"),
+  R66: heli("R66", "Robinson R66"),
 
   // ── Helicopters — MD ──
   MD52: heli("MD 520N", "MD Helicopters MD 520N"),
