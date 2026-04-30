@@ -1,37 +1,56 @@
 "use client";
 
-// Why: ambient widget — a small floating card that sits on top of the
-// map view (not a full-screen takeover). Shows the closest aircraft
-// via large split-flap displays for the marquee values (flight
-// number + airport codes), with supporting text below for type,
-// operator, distance, altitude, etc. The map keeps running
-// underneath; toggling ambient on/off only mounts/unmounts this
-// card. Designed as a "look at this" accent rather than a replacement
-// view.
+// Why: ambient widget — a floating card on top of the map showing the
+// nearest aircraft. Mirrors the SelectedFlightCard's information
+// architecture (same labels, same sections, same dt/value pairs) so
+// users learn one card-shape and see it again here scaled up. The
+// only differences are:
+//   1. "NEAREST" header replaces FLIGHT/REGISTRATION dt
+//   2. Bearing + distance shown alongside the header
+//   3. Marquee values (flight number, FROM/TO codes) wrapped in
+//      split-flap displays for the solari-board flip aesthetic
+//   4. Larger type / more generous spacing
+//   5. No selected-flight enrichment, so no schedule times or status
+//      badge — those require a per-selection AeroAPI call which we
+//      don't trigger for the nearest aircraft.
 
 import { useMemo } from "react";
+import { Helicopter, Plane } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { SplitFlapDisplay } from "@/components/ui/split-flap";
 import {
   getAircraftTypeBadgeLabel,
+  isHelicopterType,
   resolveAircraftType
 } from "@/lib/flights/aircraftTypes";
 import {
+  formatAirspeed,
   formatAltitude,
   getOperatorLabel,
-  getPrimaryIdentifier
+  getOperatorLabelTitle,
+  getPrimaryIdentifier,
+  normalizeRegisteredOwnerLabel
 } from "@/lib/flights/display";
-import { getDistanceFromHomeBaseMiles } from "@/lib/map/geo-helpers";
+import {
+  formatDistanceMiles,
+  getDistanceFromHomeBaseMiles
+} from "@/lib/map/geo-helpers";
 import type { Flight } from "@/lib/flights/types";
 import type { HomeBaseCenter } from "@/lib/types/flight-map";
-import { SplitFlapDisplay } from "@/components/ui/split-flap";
+import { cn } from "@/lib/utils";
 
-type AmbientViewProps = {
-  nearestFlight: Flight | null;
-  homeBase: HomeBaseCenter;
-};
+// Why: dt label styling — same shape as SelectedFlightCard's LABEL_CLASS
+// but slightly larger size for ambient (text-xs vs text-[10px]). Letters
+// stay uppercase + tracking-wider for the labeled-metric register.
+const LABEL_CLASS =
+  "text-xs leading-tight uppercase tracking-wider text-muted-foreground";
 
-// Why: bearing from home base to the flight, mapped to a 16-point
-// compass (N, NNE, NE, ENE, ...). Lets the viewer know which
-// direction to look up.
+const VALUE_LEADING = "leading-tight";
+
+// Why: bearing from home base to the flight, mapped to a 16-point compass
+// (N, NNE, NE, ENE, ...). Lets the viewer know which direction to look up.
 function getCompassBearingLabel(
   flight: Flight,
   home: HomeBaseCenter
@@ -66,154 +85,260 @@ function getCompassBearingLabel(
   return points[idx] ?? "N";
 }
 
-export function AmbientView({ nearestFlight, homeBase }: AmbientViewProps) {
-  const bearing = useMemo(
-    () => (nearestFlight ? getCompassBearingLabel(nearestFlight, homeBase) : null),
-    [nearestFlight, homeBase]
-  );
+type AmbientViewProps = {
+  nearestFlight: Flight | null;
+  homeBase: HomeBaseCenter;
+};
 
+export function AmbientView({ nearestFlight, homeBase }: AmbientViewProps) {
+  // Why: compute everything before the JSX so the markup reads as a
+  // straight mirror of SelectedFlightCard. nullable-flight handled by
+  // the early-return below.
   const distanceMiles = nearestFlight
     ? getDistanceFromHomeBaseMiles(nearestFlight, homeBase)
     : null;
+  const bearing = useMemo(
+    () =>
+      nearestFlight ? getCompassBearingLabel(nearestFlight, homeBase) : null,
+    [nearestFlight, homeBase]
+  );
 
-  const flightLabel = nearestFlight
-    ? getPrimaryIdentifier(nearestFlight).toUpperCase()
-    : "";
+  if (!nearestFlight) {
+    return (
+      <AmbientShell>
+        <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+          Waiting for an aircraft in range…
+        </p>
+      </AmbientShell>
+    );
+  }
 
-  const aircraftType = nearestFlight
-    ? resolveAircraftType(nearestFlight.aircraftType)
-    : null;
-  const aircraftTypeLabel = nearestFlight
-    ? getAircraftTypeBadgeLabel(nearestFlight.aircraftType)
-    : "";
-  const aircraftTypeFull = aircraftType?.full ?? aircraftTypeLabel;
-
-  const operatorLabel = nearestFlight ? getOperatorLabel(nearestFlight) : null;
-
-  const origin = nearestFlight?.origin ?? null;
-  const destination = nearestFlight?.destination ?? null;
-
-  // Why: only put origin/destination on the split-flap when they look
-  // like short codes (3-4 chars) — long readable names like "LAPD
-  // Hooper Heliport" would need ~20 cells, which looks broken in a
-  // small card. Long names render as plain text instead.
-  const originIsShort = origin != null && origin.length <= 4;
-  const destinationIsShort = destination != null && destination.length <= 4;
-
-  // Why: shown as a trailing string under the route. Builds from the
-  // longer-form names if either side isn't short-coded.
-  const longRouteText = useMemo(() => {
-    if (originIsShort && destinationIsShort) return null;
-    if (origin && destination) return `${origin} → ${destination}`;
-    if (origin) return `From ${origin}`;
-    if (destination) return `To ${destination}`;
-    return null;
-  }, [origin, destination, originIsShort, destinationIsShort]);
+  const flight = nearestFlight;
+  const primaryIdentifier = getPrimaryIdentifier(flight).toUpperCase();
+  const operatorLabel = getOperatorLabel(flight);
+  const operatorTitle = getOperatorLabelTitle(flight);
+  const showRegistration =
+    flight.registration != null &&
+    getPrimaryIdentifier(flight) !== flight.registration;
+  const ownerLabel = normalizeRegisteredOwnerLabel(flight.registeredOwner);
+  const showOwner = ownerLabel != null && ownerLabel !== operatorLabel;
 
   return (
-    // Why: top-center of the viewport. With the sidebar open
-    // (320px on the left), this lands roughly centered over the map
-    // area at common viewport widths. left-1/2 + -translate-x-1/2
-    // ignores the sidebar — slightly off-center over just the map
-    // but reads as "centered on screen."
-    <div className="pointer-events-none fixed top-4 left-1/2 z-30 -translate-x-1/2">
-      <div className="pointer-events-auto flex flex-col gap-3 rounded-lg border border-border/60 bg-card/95 px-5 py-4 shadow-xl backdrop-blur-sm">
-        {/* Header strip */}
-        <div className="flex items-baseline justify-between gap-6">
-          <p className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-            Nearest
-          </p>
-          {bearing && distanceMiles != null ? (
-            <p className="text-[10px] tabular-nums uppercase tracking-wider text-muted-foreground">
-              {distanceMiles.toFixed(1)} mi · {bearing}
+    <AmbientShell>
+      <CardHeader className="gap-3 px-5 pt-5">
+        {/* Header row — "NEAREST" + bearing/distance on left, type
+            badge on right. Mirrors SelectedFlightCard's
+            FLIGHT/REGISTRATION dt + badges layout. */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <p className={LABEL_CLASS}>
+              Nearest
+              {bearing && distanceMiles != null ? (
+                <span className="ml-2 normal-case tracking-normal text-foreground/60 tabular-nums">
+                  {formatDistanceMiles(distanceMiles)} · {bearing}
+                </span>
+              ) : null}
             </p>
-          ) : (
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Waiting…
-            </p>
-          )}
-        </div>
-
-        {/* Marquee row: flight number + route via split-flaps */}
-        {nearestFlight ? (
-          <div className="flex items-center gap-4">
-            {/* Flight number */}
+            {/* Split-flap title. Length pads to 6 chars min so short
+                callsigns (CMD7, EJA471) don't make the panel collapse. */}
             <div className="rounded-md bg-foreground px-3 py-2 text-background shadow-md">
               <SplitFlapDisplay
-                value={flightLabel}
+                value={primaryIdentifier}
                 charSet="alphanumeric"
-                length={Math.max(flightLabel.length, 6)}
+                length={Math.max(primaryIdentifier.length, 6)}
                 cycleMs={42}
                 flipMs={300}
-                className="text-2xl font-semibold tracking-wider"
+                className="text-3xl font-semibold tracking-wider"
               />
             </div>
-
-            {/* Route — split-flap when both sides are short codes,
-                otherwise let the long-route text below handle it. */}
-            {originIsShort && destinationIsShort ? (
-              <div className="flex items-center gap-2">
-                <div className="rounded-md bg-foreground px-2.5 py-2 text-background shadow-md">
-                  <SplitFlapDisplay
-                    value={origin ?? ""}
-                    charSet="alpha"
-                    length={3}
-                    padDirection="end"
-                    cycleMs={50}
-                    flipMs={300}
-                    className="text-2xl font-semibold tracking-wider"
-                  />
-                </div>
-                <span className="text-2xl text-muted-foreground/60">→</span>
-                <div className="rounded-md bg-foreground px-2.5 py-2 text-background shadow-md">
-                  <SplitFlapDisplay
-                    value={destination ?? ""}
-                    charSet="alpha"
-                    length={3}
-                    padDirection="end"
-                    cycleMs={50}
-                    flipMs={300}
-                    className="text-2xl font-semibold tracking-wider"
-                  />
-                </div>
-              </div>
-            ) : null}
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">No aircraft in range</p>
-        )}
+          <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
+        </div>
 
-        {/* Supporting info row */}
-        {nearestFlight ? (
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">{aircraftTypeFull}</span>
-            {operatorLabel ? (
-              <>
-                <span className="opacity-50">·</span>
-                <span>{operatorLabel}</span>
-              </>
-            ) : null}
-            {longRouteText ? (
-              <>
-                <span className="opacity-50">·</span>
-                <span className="tabular-nums">{longRouteText}</span>
-              </>
-            ) : null}
-            <span className="opacity-50">·</span>
-            <span className="tabular-nums">
-              {formatAltitude(nearestFlight.altitudeFeet)}
-            </span>
-            {nearestFlight.groundspeedKnots != null ? (
-              <>
-                <span className="opacity-50">·</span>
-                <span className="tabular-nums">
-                  {nearestFlight.groundspeedKnots.toLocaleString()} kt
-                </span>
-              </>
-            ) : null}
+        {/* Route row — FROM / TO with split-flaps for short codes,
+            plain text for long readable names. */}
+        <AmbientRouteRow flight={flight} />
+      </CardHeader>
+
+      <CardContent className="px-5 pb-5">
+        {/* Operator / Registration / Owner — same dl layout as
+            SelectedFlightCard. Larger text-sm for ambient. */}
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          {operatorLabel ? (
+            <div
+              className={cn(
+                "flex min-w-0 flex-col gap-1",
+                !showRegistration && "col-span-2"
+              )}
+            >
+              <dt className={LABEL_CLASS}>{operatorTitle}</dt>
+              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+                {operatorLabel}
+              </dd>
+            </div>
+          ) : null}
+          {showRegistration ? (
+            <div
+              className={cn(
+                "flex min-w-0 flex-col gap-1",
+                !operatorLabel && "col-span-2"
+              )}
+            >
+              <dt className={LABEL_CLASS}>Registration</dt>
+              <dd
+                className={cn(
+                  "truncate font-medium tabular-nums",
+                  VALUE_LEADING
+                )}
+              >
+                {flight.registration}
+              </dd>
+            </div>
+          ) : null}
+          {showOwner ? (
+            <div className="col-span-2 flex min-w-0 flex-col gap-1">
+              <dt className={LABEL_CLASS}>Owner</dt>
+              <dd className={cn("truncate font-medium", VALUE_LEADING)}>
+                {ownerLabel}
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+
+        <Separator className="my-3" />
+
+        {/* Stats — Distance / Altitude / Airspeed, mirrors
+            SelectedFlightCard's metrics row. */}
+        <dl className="grid grid-cols-3 gap-3 text-sm">
+          <div className="flex flex-col gap-1">
+            <dt className={LABEL_CLASS}>Distance</dt>
+            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
+              {formatDistanceMiles(
+                getDistanceFromHomeBaseMiles(flight, homeBase)
+              )}
+            </dd>
           </div>
-        ) : null}
-      </div>
+          <div className="flex flex-col gap-1">
+            <dt className={LABEL_CLASS}>Altitude</dt>
+            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
+              {formatAltitude(flight.altitudeFeet)}
+            </dd>
+          </div>
+          <div className="flex flex-col gap-1">
+            <dt className={LABEL_CLASS}>Airspeed</dt>
+            <dd className={cn("font-medium tabular-nums", VALUE_LEADING)}>
+              {formatAirspeed(flight.groundspeedKnots)}
+            </dd>
+          </div>
+        </dl>
+      </CardContent>
+    </AmbientShell>
+  );
+}
+
+// Why: outer shell — fixed positioning, glassmorphic background, the
+// pointer-events handling. Pulled out so the early-return waiting
+// state and the populated state share the same chrome.
+function AmbientShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="pointer-events-none fixed top-4 left-1/2 z-30 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2">
+      <Card className="pointer-events-auto gap-3 border-border/60 bg-card/95 py-0 shadow-xl backdrop-blur-sm">
+        {children}
+      </Card>
     </div>
+  );
+}
+
+// Why: ambient-sized version of SelectedFlightCard's AircraftTypeBadge.
+// We don't import the real one because it carries a Tooltip+Provider
+// per badge that's overkill for the ambient surface, where the user
+// is glancing not hovering. Just the icon + short name.
+function AmbientAircraftTypeBadge({
+  aircraftType
+}: {
+  aircraftType: string | null;
+}) {
+  const resolved = resolveAircraftType(aircraftType);
+  const label = getAircraftTypeBadgeLabel(aircraftType);
+  const Icon = isHelicopterType(aircraftType) ? Helicopter : Plane;
+  return (
+    <Badge
+      variant="secondary"
+      className="text-xs"
+      title={resolved?.full ?? label}
+    >
+      <Icon aria-hidden="true" />
+      {label}
+    </Badge>
+  );
+}
+
+// Why: ambient version of FlightRouteRow — same FROM / TO split as
+// SelectedFlightCard, but each airport code wrapped in a split-flap
+// panel when it's short (≤4 chars / IATA code). Long readable names
+// (helipads, hospital names) fall back to plain text in the same
+// position because a 20-cell split-flap on "LAPD Hooper Heliport"
+// would be visually broken.
+function AmbientRouteRow({ flight }: { flight: Flight }) {
+  const origin = flight.origin;
+  const destination = flight.destination;
+
+  if (origin && destination) {
+    return (
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className={LABEL_CLASS}>From</p>
+          <AirportCell code={origin} />
+        </div>
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className={LABEL_CLASS}>To</p>
+          <AirportCell code={destination} />
+        </div>
+      </div>
+    );
+  }
+
+  if (origin) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className={LABEL_CLASS}>From</p>
+        <AirportCell code={origin} />
+      </div>
+    );
+  }
+
+  if (destination) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className={LABEL_CLASS}>To</p>
+        <AirportCell code={destination} />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function AirportCell({ code }: { code: string }) {
+  const isShortCode = code.length <= 4;
+  if (isShortCode) {
+    return (
+      <div className="inline-block w-fit rounded-md bg-foreground px-2.5 py-1.5 text-background shadow-md">
+        <SplitFlapDisplay
+          value={code}
+          charSet="alpha"
+          length={3}
+          padDirection="end"
+          cycleMs={50}
+          flipMs={300}
+          className="text-2xl font-semibold tracking-wider"
+        />
+      </div>
+    );
+  }
+  return (
+    <p className={cn("truncate text-base font-medium", VALUE_LEADING)}>
+      {code}
+    </p>
   );
 }
