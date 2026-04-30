@@ -1,5 +1,4 @@
 import type { Flight } from "@/lib/flights/types";
-import { hasCommercialFlightIdentity } from "@/lib/flights/scoring";
 import { isOperatingVfr } from "@/lib/flights/squawk";
 import { getLiveFlightIdentityKey } from "@/lib/flights/identity";
 
@@ -230,11 +229,15 @@ export function getOperatorLabel(flight: Flight) {
 export function getOperatorLabelTitle(flight: Flight) {
   const operatorLabel = getOperatorLabel(flight);
 
-  // Why: a commercial flight (has a flight number or commercial-pattern
-  // callsign) labels its operator as "Airline" regardless of whether the
-  // displayed string came from the ICAO code or the registered owner —
-  // the dt is about category, not provenance.
-  if (operatorLabel && flight.airline && hasCommercialFlightIdentity(flight)) {
+  // Why: "Airline" is reserved for scheduled passenger/cargo carriers,
+  // not anything-with-a-3-letter-callsign. Real airlines come back with
+  // a flightNumber populated (AAL2523 → "AA2523", SWA388 → "WN388",
+  // FDX1415 → "FX1415"); air ambulance, charter, EMS, and private ops
+  // get an ICAO callsign too (CMD7, EJA471) but no IATA flight number,
+  // so they correctly fall through to "Operator". Using flightNumber as
+  // the gate sharpens the previous hasCommercialFlightIdentity check,
+  // which incorrectly labeled CALSTAR helicopters as "Airline".
+  if (operatorLabel && flight.airline && flight.flightNumber) {
     return "Airline";
   }
 

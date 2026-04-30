@@ -4,6 +4,7 @@ import { memo, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   getOperatorLabel,
+  getOperatorLabelTitle,
   getPrimaryIdentifier,
   getStripRouteLabel
 } from "@/lib/flights/display";
@@ -94,8 +95,12 @@ function FlightListItemImpl({
       </div>
       <div className="grid grid-cols-2 gap-2 text-[11px]">
         <span className="flex min-w-0 flex-col">
+          {/* Why: keep the strip row's dt in lockstep with SelectedFlightCard
+              so a flight that reads "Airline: Southwest Airlines" in the main
+              card doesn't read "Operator: Southwest Airlines" in its strip row.
+              CALSTAR & friends correctly degrade to "Operator" in both places. */}
           <small className="text-[9px] uppercase tracking-wider text-muted-foreground">
-            Operator
+            {getOperatorLabelTitle(flight)}
           </small>
           <strong className="truncate font-medium">
             {/* Why: when there's no real operator info (no airline, no
