@@ -1345,14 +1345,14 @@ export function FlightMap() {
       <MapHoverCard hoveredFlight={hoveredFlight} hoveredFlightDisplay={hoveredFlightDisplay} />
       <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
 
-      {/* Why: floating area config button sits BELOW MapLibre's zoom
-          controls (bottom-right corner). The `.maplibregl-ctrl-
-          bottom-right` rule in globals.css pushes the zoom-control
-          stack up to bottom:56px, freeing this slot at the very
-          bottom-right for our pill button. right-2.5 (10px) matches
-          MapLibre's default 10px margin so the two buttons stack
-          right-aligned. */}
-      <div className="fixed right-2.5 bottom-2.5 z-20">
+      {/* Why: floating area config button sits to the LEFT of
+          MapLibre's NavigationControl zoom buttons. MapLibre's group
+          is ~30px wide with a 10px right margin (occupies right:10px
+          to right:40px). Place our pill at right-12 (48px) for ~8px
+          horizontal gap. bottom-2.5 (10px) aligns the pill's bottom
+          with the zoom group's bottom edge so they read as a
+          horizontal pair anchored to the viewport corner. */}
+      <div className="fixed right-12 bottom-2.5 z-20">
         <AreaConfigPopover
           open={areaFlyoutOpen}
           onOpenChange={handleAreaPopoverOpenChange}

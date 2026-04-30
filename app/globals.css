@@ -128,16 +128,3 @@
     }
 }
 
-/* Why: MapLibre's NavigationControl mounts at .maplibregl-ctrl-bottom-right
-   with bottom:0 by default, hugging the viewport bottom. We want the
-   floating area-config MapPin button to live BELOW those zoom controls
-   (closer to the viewport bottom), so the controls need to shift up to
-   make room. 56px lifts them clear of a ~36px button + 10px gap +
-   10px corner margin.
-   .maplibregl-map prefix bumps the selector specificity (0,0,2,0)
-   above MapLibre's own rule (0,0,1,0). Without it, MapLibre's
-   maplibre-gl.css — imported later in MapCanvas.tsx — wins the
-   cascade tie and our override is silently ignored. */
-.maplibregl-map .maplibregl-ctrl-bottom-right {
-  bottom: 56px;
-}
