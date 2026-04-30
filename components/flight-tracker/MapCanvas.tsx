@@ -396,6 +396,12 @@ export function MapCanvas({
   // the latest mode without re-triggering itself on every theme change.
   const mapModeRef = useRef<MapMode>(mapMode);
   mapModeRef.current = mapMode;
+  // Why: tracks the basemap mode actually applied to the map. The map is
+  // created with BASEMAP_URLS[initial mode], so the first applied value
+  // matches the initial render. Without this guard, the theme-change
+  // useEffect calls setStyle() on its first run (when mapReady flips to
+  // true), wiping the just-added flight/track sources for no reason.
+  const appliedMapModeRef = useRef<MapMode>(mapMode);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -449,6 +455,12 @@ export function MapCanvas({
   // and selected-track sources from refs.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
+    // Why: skip the no-op call on first run after mapReady flips. The map
+    // was already created with BASEMAP_URLS[initial mode], so calling
+    // setStyle with the same URL would needlessly wipe the flights /
+    // selected-track sources we just added in the load handler.
+    if (appliedMapModeRef.current === mapMode) return;
+    appliedMapModeRef.current = mapMode;
     const map = mapRef.current;
     map.setStyle(BASEMAP_URLS[mapMode]);
     const handleStyleLoad = () => {
@@ -495,15 +507,28 @@ export function MapCanvas({
       cancelAnimationFrame(animationFrameRef.current);
     }
 
-    const flightSource = source;
-    const trackSource = mapRef.current?.getSource("selected-track") as GeoJSONSource | undefined;
-
     // [trail-debug] Throttle for the optional in-frame diagnostic. Toggle with
     // `window.__TRAIL_DEBUG = true` in DevTools to surface the icon vs trail-tip
     // relationship for the selected flight at ~1 Hz.
     let trailDebugLastLogAtMs = 0;
 
     function renderFrame(frameTime: number) {
+      // Why: re-fetch the GeoJSON sources every frame instead of capturing
+      // them in this closure. map.setStyle() (theme switch) wipes and
+      // recreates the sources — a captured reference becomes a dead handle
+      // whose setData() silently no-ops, freezing the flight dots
+      // mid-animation. The lookup is a Map.get; cost is negligible.
+      const flightSource = mapRef.current?.getSource("flights") as
+        | GeoJSONSource
+        | undefined;
+      const trackSource = mapRef.current?.getSource("selected-track") as
+        | GeoJSONSource
+        | undefined;
+      if (!flightSource) {
+        // Sources not (yet) re-added after a setStyle; skip this frame.
+        animationFrameRef.current = requestAnimationFrame(renderFrame);
+        return;
+      }
       const animationStates = flightAnimationStatesRef.current;
       const stripHoverElapsedMs =
         hoveredStripStartedAtRef.current == null ? STRIP_HOVER_ECHO_DURATION_MS : frameTime - hoveredStripStartedAtRef.current;
