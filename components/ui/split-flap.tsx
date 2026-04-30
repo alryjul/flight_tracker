@@ -61,16 +61,18 @@ type FlapProps = {
 
 function Flap({ half, animated, children }: FlapProps) {
   // Why: each half-flap is positioned absolute, fills its parent cell,
-  // and is clipped to its half via clip-path. backface-hidden cleans
-  // up the rotateX flip so the back side of the panel doesn't bleed.
-  // animated half plays the flip keyframe; static halves don't.
+  // and is clipped to its half via clip-path. transform-origin must be
+  // CENTER (not the seam edge) so the rotation pivot lands at the
+  // visible seam — the clipped half rotates around the cell's center
+  // line, which is exactly where the static-half boundary sits.
+  // backface-hidden cleans up the rotateX flip so the back side of
+  // the panel doesn't bleed. animated half plays the flip keyframe;
+  // static halves don't.
   return (
     <div
       className={cn(
-        "absolute inset-0 box-border bg-inherit text-inherit [backface-visibility:hidden]",
-        half === "top"
-          ? "split-flap-clip-top origin-bottom"
-          : "split-flap-clip-bottom origin-top",
+        "absolute inset-0 box-border bg-inherit text-inherit origin-center [backface-visibility:hidden]",
+        half === "top" ? "split-flap-clip-top" : "split-flap-clip-bottom",
         animated &&
           (half === "top" ? "split-flap-anim-top z-20" : "split-flap-anim-bottom z-20"),
         !animated && "z-10"
@@ -280,7 +282,13 @@ export function SplitFlapDisplay({
       role="text"
       aria-label={value}
       className={cn(
-        "inline-flex select-none items-baseline gap-[0.1ch] tabular-nums",
+        // Why: bg-inherit / text-inherit on the wrapper so the cell
+        // panels (which use bg-inherit too) successfully cascade
+        // back up to whatever container the caller wrapped us in.
+        // Without this the cascade breaks here at "inline-flex"
+        // (transparent default) and cells render with no panel
+        // background.
+        "inline-flex select-none items-baseline gap-[0.1ch] bg-inherit tabular-nums text-inherit",
         className
       )}
       style={styleVars}
