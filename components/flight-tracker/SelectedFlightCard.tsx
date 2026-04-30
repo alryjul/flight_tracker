@@ -150,6 +150,65 @@ function FlightTitleWithRadioTooltip({ flight }: { flight: Flight }) {
   );
 }
 
+// Why: route row splits into FROM / TO when both endpoints are known
+// so each side gets its own half-width column for truncation
+// breathing room (long helipad / medical center names like "LAPD
+// Hooper Heliport" or "Cedars-Sinai Medical Center" don't fit a
+// single-line "X to Y" without truncating). Falls back to a single
+// full-width labeled row when only one endpoint is known, or to the
+// VFR / Route pending status when neither is.
+function FlightRouteRow({ flight }: { flight: Flight }) {
+  const origin = flight.origin;
+  const destination = flight.destination;
+  const valueClass = cn(
+    "truncate text-xs font-medium tabular-nums",
+    VALUE_LEADING
+  );
+
+  if (origin && destination) {
+    return (
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className={LABEL_CLASS}>From</p>
+          <p className={valueClass}>{origin}</p>
+        </div>
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className={LABEL_CLASS}>To</p>
+          <p className={valueClass}>{destination}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (origin) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className={LABEL_CLASS}>From</p>
+        <p className={valueClass}>{origin}</p>
+      </div>
+    );
+  }
+
+  if (destination) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className={LABEL_CLASS}>To</p>
+        <p className={valueClass}>{destination}</p>
+      </div>
+    );
+  }
+
+  // No origin and no destination — fall back to the single-row Route
+  // label with whatever fallback string applies (VFR for VFR-squawking
+  // flights, Route pending otherwise).
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <p className={LABEL_CLASS}>Route</p>
+      <p className={valueClass}>{getStripRouteLabel(flight)}</p>
+    </div>
+  );
+}
+
 // Why: aircraft-type badge needs the readable short name, an icon
 // (Plane / Helicopter), and a hover tooltip with the raw ICAO + full
 // manufacturer-prefixed name when we have a mapping. For unmapped
@@ -260,22 +319,12 @@ function SelectedFlightCardImpl({
           </div>
         </div>
         {/* Route as second-tier emphasis directly under the title.
-            Mirrors the FLIGHT / REGISTRATION block's dt+title structure
-            so the ROUTE label visually anchors the route line the same
-            way. getStripRouteLabel always returns something usable —
-            "BUR to SJC" / "From SMO" / "Route pending" / "VFR" — so
-            this slot never goes blank. */}
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={LABEL_CLASS}>Route</p>
-          <p
-            className={cn(
-              "truncate text-xs font-medium tabular-nums",
-              VALUE_LEADING
-            )}
-          >
-            {getStripRouteLabel(flight)}
-          </p>
-        </div>
+            Splits into FROM / TO when both ends are known so each side
+            gets its own half-width column (avoids truncating long
+            helipad / medical center names). Falls back to a single
+            full-width row for origin-only, destination-only, or
+            no-route cases (VFR / Route pending). */}
+        <FlightRouteRow flight={flight} />
       </CardHeader>
       <CardContent className="px-3">
         {/* Why: each dl cell wraps its dt+dd in `flex flex-col gap-1` so
