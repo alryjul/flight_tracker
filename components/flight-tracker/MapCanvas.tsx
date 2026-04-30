@@ -229,6 +229,7 @@ type SetupArgs = {
   homeBaseFeatures: ReturnType<typeof buildHomeBaseFeatures>;
   hoveredFlightIdRef: React.MutableRefObject<string | null>;
   onSelectFlight: (id: string) => void;
+  onDeselectFlight: () => void;
   onHoverFlight: (state: HoveredFlightState | null) => void;
 };
 
@@ -241,6 +242,7 @@ function setupCustomLayers({
   homeBaseFeatures,
   hoveredFlightIdRef,
   onSelectFlight,
+  onDeselectFlight,
   onHoverFlight
 }: SetupArgs) {
   map.addSource("home-base", {
@@ -425,6 +427,22 @@ function setupCustomLayers({
     }
   });
 
+  // Why: clicking the map background (anywhere not on a flight point)
+  // deselects the currently selected flight. Without this, once the
+  // user selects a flight there's no easy way to back out — the
+  // selected card stays glued to the sidebar until a new flight is
+  // clicked. queryRenderedFeatures filters to flight-points so we
+  // don't deselect when the click DID land on a point (the
+  // layer-specific handler above handles that path).
+  map.on("click", (event) => {
+    const features = map.queryRenderedFeatures(event.point, {
+      layers: ["flight-points"]
+    });
+    if (features.length === 0) {
+      onDeselectFlight();
+    }
+  });
+
   map.on("mousemove", "flight-points", (event) => {
     const feature = event.features?.[0];
     const id = feature?.properties?.id;
@@ -478,6 +496,7 @@ type MapCanvasProps = {
   >;
   selectedRenderedPositionRef: React.MutableRefObject<{ latitude: number; longitude: number } | null>;
   onSelectFlight: (id: string) => void;
+  onDeselectFlight: () => void;
   onHoverFlight: (state: HoveredFlightState | null) => void;
   mapLabelVisibility: MapLabelVisibility;
 };
@@ -502,6 +521,7 @@ export function MapCanvas({
   selectedMetadataByIdRef,
   selectedRenderedPositionRef,
   onSelectFlight,
+  onDeselectFlight,
   onHoverFlight,
   mapLabelVisibility
 }: MapCanvasProps) {
@@ -564,6 +584,7 @@ export function MapCanvas({
         homeBaseFeatures,
         hoveredFlightIdRef,
         onSelectFlight,
+        onDeselectFlight,
         onHoverFlight
       });
       // Why: apply current label visibility on initial load. Without
@@ -612,6 +633,7 @@ export function MapCanvas({
         homeBaseFeatures,
         hoveredFlightIdRef,
         onSelectFlight,
+        onDeselectFlight,
         onHoverFlight
       });
       // Why: setStyle wipes per-layer visibility along with our custom

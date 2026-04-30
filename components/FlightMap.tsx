@@ -1168,6 +1168,33 @@ export function FlightMap() {
       }, null),
     [displayFlights, homeBase]
   );
+
+  // Why: ambient view subject — prefer the user-selected flight when one
+  // is selected, fall back to the auto-tracked nearest. AmbientView's
+  // dt label adapts ("SELECTED" vs "NEAREST") so the user can tell
+  // which mode they're in. When the selected flight is no longer in
+  // the visible flight set (drifted out of range, lost ADS-B), the
+  // lookup returns undefined and we fall through to nearest.
+  const ambientFlight = useMemo<Flight | null>(() => {
+    if (selectedFlightId) {
+      const found = displayFlights.find((f) => f.id === selectedFlightId);
+      if (found) return found;
+    }
+    return nearestFlight;
+  }, [selectedFlightId, displayFlights, nearestFlight]);
+  const ambientFlightIsSelected =
+    selectedFlightId != null &&
+    ambientFlight != null &&
+    ambientFlight.id === selectedFlightId;
+
+  // Why: stable callback for the map background-click handler in
+  // MapCanvas. Wrapping in useCallback keeps MapCanvas's effect deps
+  // happy and avoids re-registering the click listener on every
+  // FlightMap render.
+  const handleDeselectFlight = useCallback(() => {
+    setSelectedFlightId(null);
+  }, []);
+
   const hoveredFlightDisplay =
     hoveredFlight == null
       ? null
@@ -1313,6 +1340,7 @@ export function FlightMap() {
         selectedMetadataByIdRef={selectedMetadataByIdRef}
         selectedRenderedPositionRef={selectedRenderedPositionRef}
         onSelectFlight={setSelectedFlightId}
+        onDeselectFlight={handleDeselectFlight}
         onHoverFlight={setHoveredFlight}
         mapLabelVisibility={mapLabelVisibility}
       />
@@ -1378,7 +1406,11 @@ export function FlightMap() {
       <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
 
       {ambientMode ? (
-        <AmbientView nearestFlight={nearestFlight} homeBase={homeBase} />
+        <AmbientView
+          flight={ambientFlight}
+          isSelected={ambientFlightIsSelected}
+          homeBase={homeBase}
+        />
       ) : null}
 
       {/* Why: floating map toolbar — one container holds the ambient

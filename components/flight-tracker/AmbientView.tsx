@@ -86,24 +86,26 @@ function getCompassBearingLabel(
 }
 
 type AmbientViewProps = {
-  nearestFlight: Flight | null;
+  flight: Flight | null;
+  /** Whether the displayed flight is the user-selected one (true) or
+   * the auto-tracked nearest aircraft (false). Drives the dt label. */
+  isSelected: boolean;
   homeBase: HomeBaseCenter;
 };
 
-export function AmbientView({ nearestFlight, homeBase }: AmbientViewProps) {
+export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) {
   // Why: compute everything before the JSX so the markup reads as a
   // straight mirror of SelectedFlightCard. nullable-flight handled by
   // the early-return below.
-  const distanceMiles = nearestFlight
-    ? getDistanceFromHomeBaseMiles(nearestFlight, homeBase)
+  const distanceMiles = flight
+    ? getDistanceFromHomeBaseMiles(flight, homeBase)
     : null;
   const bearing = useMemo(
-    () =>
-      nearestFlight ? getCompassBearingLabel(nearestFlight, homeBase) : null,
-    [nearestFlight, homeBase]
+    () => (flight ? getCompassBearingLabel(flight, homeBase) : null),
+    [flight, homeBase]
   );
 
-  if (!nearestFlight) {
+  if (!flight) {
     return (
       <AmbientShell>
         <p className="px-2 py-8 text-center text-sm text-muted-foreground">
@@ -112,8 +114,6 @@ export function AmbientView({ nearestFlight, homeBase }: AmbientViewProps) {
       </AmbientShell>
     );
   }
-
-  const flight = nearestFlight;
   const primaryIdentifier = getPrimaryIdentifier(flight).toUpperCase();
   const operatorLabel = getOperatorLabel(flight);
   const operatorTitle = getOperatorLabelTitle(flight);
@@ -132,7 +132,7 @@ export function AmbientView({ nearestFlight, homeBase }: AmbientViewProps) {
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-2">
             <p className={LABEL_CLASS}>
-              Nearest
+              {isSelected ? "Selected" : "Nearest"}
               {bearing && distanceMiles != null ? (
                 <span className="ml-2 normal-case tracking-normal text-foreground/60 tabular-nums">
                   {formatDistanceMiles(distanceMiles)} · {bearing}
