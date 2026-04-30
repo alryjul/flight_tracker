@@ -24,7 +24,7 @@ import {
   getOperatorLabelTitle,
   getPrimaryIdentifier,
   getRadiotelephonyCall,
-  getRouteLabel,
+  getStripRouteLabel,
   normalizeRegisteredOwnerLabel
 } from "@/lib/flights/display";
 import type { Flight } from "@/lib/flights/types";
@@ -110,14 +110,27 @@ function SelectedFlightCardImpl({
   altitudeTrend,
   airspeedTrend
 }: SelectedFlightCardProps) {
+  // Why: pull these once so the visibility logic for the Operator +
+  // Registration row reads cleanly. When only one of the two fields
+  // applies we span it across both columns; when both apply they sit
+  // side-by-side on a single grid row.
+  const operatorLabel = getOperatorLabel(flight);
+  const showRegistration =
+    flight.registration != null &&
+    getPrimaryIdentifier(flight) !== flight.registration;
+  const ownerLabel = normalizeRegisteredOwnerLabel(flight.registeredOwner);
+  const showOwner = ownerLabel != null && ownerLabel !== operatorLabel;
+
   return (
     <Card className="mx-1 mt-2 mb-2 shrink-0 gap-3 py-3">
-      <CardHeader className="px-3">
-        {/* Why: pin the badges to the top-right corner of the header
-            instead of vertically centering them next to the big title.
-            With items-start the badges align with the small "FLIGHT" /
-            "REGISTRATION" dt label on the left, leaving the title row
-            visually clean. */}
+      <CardHeader className="gap-2 px-3">
+        {/* Why: the hero hierarchy for a commercial flight reads:
+              1. Flight number   ← biggest, with radio tooltip
+              2. Route           ← second tier, right under the title
+              3. Airline / Reg   ← side-by-side dl row in CardContent
+            Badges (type, status) pin to the top-right via items-start,
+            aligning with the small dt label rather than centering on
+            the big title. */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 flex-col gap-1">
             <CardDescription className="text-[10px] uppercase tracking-wider">
@@ -136,22 +149,30 @@ function SelectedFlightCardImpl({
             ) : null}
           </div>
         </div>
+        {/* Route as second-tier emphasis directly under the title.
+            getStripRouteLabel always returns something usable —
+            "BUR to SJC" / "From SMO" / "Route pending" / "VFR" — so
+            this slot never goes blank. */}
+        <p className="truncate text-sm font-medium tabular-nums">
+          {getStripRouteLabel(flight)}
+        </p>
       </CardHeader>
       <CardContent className="px-3">
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-          {getOperatorLabel(flight) ? (
-            <div className="col-span-2 min-w-0">
+          {operatorLabel ? (
+            <div
+              className={cn("min-w-0", !showRegistration && "col-span-2")}
+            >
               <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 {getOperatorLabelTitle(flight)}
               </dt>
-              <dd className="truncate font-medium">
-                {getOperatorLabel(flight)}
-              </dd>
+              <dd className="truncate font-medium">{operatorLabel}</dd>
             </div>
           ) : null}
-          {flight.registration &&
-          getPrimaryIdentifier(flight) !== flight.registration ? (
-            <div className="min-w-0">
+          {showRegistration ? (
+            <div
+              className={cn("min-w-0", !operatorLabel && "col-span-2")}
+            >
               <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Registration
               </dt>
@@ -160,26 +181,12 @@ function SelectedFlightCardImpl({
               </dd>
             </div>
           ) : null}
-          {getRouteLabel(flight) ? (
-            <div className="col-span-2 min-w-0">
-              <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Route
-              </dt>
-              <dd className="truncate font-medium tabular-nums">
-                {getRouteLabel(flight)}
-              </dd>
-            </div>
-          ) : null}
-          {normalizeRegisteredOwnerLabel(flight.registeredOwner) &&
-          normalizeRegisteredOwnerLabel(flight.registeredOwner) !==
-            getOperatorLabel(flight) ? (
+          {showOwner ? (
             <div className="col-span-2 min-w-0">
               <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Owner
               </dt>
-              <dd className="truncate font-medium">
-                {normalizeRegisteredOwnerLabel(flight.registeredOwner)}
-              </dd>
+              <dd className="truncate font-medium">{ownerLabel}</dd>
             </div>
           ) : null}
         </dl>
