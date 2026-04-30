@@ -70,13 +70,19 @@ const AIRPORT_CELL_LENGTH = 4;
 // might contain a long readable name (LAPD Hooper Heliport,
 // Cedars-Sinai Medical Center) that falls back to truncated text;
 // "base" leaves more characters visible before truncation.
+// Why: panel height stays constant across both sizes — variants
+// changing height made the rows feel like they were "growing" with
+// the font. h-9 (36px) is tight to text-xl's 20px font + small
+// padding; text-base (16px) fits comfortably in the same height
+// with extra slack.
 type HeroPanelSize = "lg" | "base";
+const HERO_PANEL_HEIGHT = "h-9";
 const SIZE_CLASSES: Record<
   HeroPanelSize,
-  { display: string; fallback: string; height: string }
+  { display: string; fallback: string }
 > = {
-  lg: { display: "text-xl", fallback: "text-base", height: "h-12" },
-  base: { display: "text-base", fallback: "text-xs", height: "h-10" }
+  lg: { display: "text-xl", fallback: "text-base" },
+  base: { display: "text-base", fallback: "text-xs" }
 };
 
 type AmbientViewProps = {
@@ -318,7 +324,7 @@ function HeroPanel({
       <div
         className={cn(
           "flex items-center justify-start overflow-hidden rounded-md bg-background px-1.5 text-foreground shadow-inner ring-1 ring-border/30",
-          sizeClasses.height
+          HERO_PANEL_HEIGHT
         )}
       >
         {fallback ? (
