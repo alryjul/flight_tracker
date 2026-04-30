@@ -125,9 +125,14 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
         <div className="flex min-w-0 flex-col gap-1">
           <p className={LABEL_CLASS}>
             {isSelected ? "Selected" : "Nearest"}
-            {flight && bearing && distanceMiles != null ? (
-              <span className="ml-2 normal-case tracking-normal text-foreground/60 tabular-nums">
-                {formatDistanceMiles(distanceMiles)} · {bearing}
+            {flight && bearing ? (
+              // Why: bearing only, no distance. Distance is the
+              // primary stat in the bottom Distance/Altitude/Airspeed
+              // row; repeating it here would just be noise. Bearing
+              // alone gives the "where to look up" directional cue
+              // that pairs with the Nearest label.
+              <span className="ml-2 normal-case tracking-normal text-foreground/60">
+                {bearing}
               </span>
             ) : null}
           </p>
