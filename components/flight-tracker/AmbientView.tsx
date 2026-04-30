@@ -75,7 +75,7 @@ const SIZE_CLASSES: Record<
   HeroPanelSize,
   { display: string; fallback: string; height: string }
 > = {
-  lg: { display: "text-lg", fallback: "text-sm", height: "h-11" },
+  lg: { display: "text-xl", fallback: "text-base", height: "h-12" },
   base: { display: "text-base", fallback: "text-xs", height: "h-10" }
 };
 
