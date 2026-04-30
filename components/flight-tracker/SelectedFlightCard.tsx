@@ -165,10 +165,18 @@ function SelectedFlightCardImpl({
         </div>
       </CardHeader>
       <CardContent className="px-3">
+        {/* Why: each dl cell wraps its dt+dd in `flex flex-col gap-1` so
+            the 4px label-to-value rhythm matches the FLIGHT / ROUTE
+            blocks in the header. Without this the content cells render
+            with dt and dd touching (preflight resets default dl
+            margins), which read visibly tighter than the header. */}
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
           {operatorLabel ? (
             <div
-              className={cn("min-w-0", !showRegistration && "col-span-2")}
+              className={cn(
+                "flex min-w-0 flex-col gap-1",
+                !showRegistration && "col-span-2"
+              )}
             >
               <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 {getOperatorLabelTitle(flight)}
@@ -178,7 +186,10 @@ function SelectedFlightCardImpl({
           ) : null}
           {showRegistration ? (
             <div
-              className={cn("min-w-0", !operatorLabel && "col-span-2")}
+              className={cn(
+                "flex min-w-0 flex-col gap-1",
+                !operatorLabel && "col-span-2"
+              )}
             >
               <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Registration
@@ -189,7 +200,7 @@ function SelectedFlightCardImpl({
             </div>
           ) : null}
           {showOwner ? (
-            <div className="col-span-2 min-w-0">
+            <div className="col-span-2 flex min-w-0 flex-col gap-1">
               <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Owner
               </dt>
@@ -199,7 +210,7 @@ function SelectedFlightCardImpl({
         </dl>
         <Separator className="my-2" />
         <dl className="grid grid-cols-3 gap-2 text-xs">
-          <div>
+          <div className="flex flex-col gap-1">
             <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Distance
             </dt>
@@ -209,7 +220,7 @@ function SelectedFlightCardImpl({
               )}
             </dd>
           </div>
-          <div>
+          <div className="flex flex-col gap-1">
             <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Altitude
             </dt>
@@ -231,7 +242,7 @@ function SelectedFlightCardImpl({
               ) : null}
             </dd>
           </div>
-          <div>
+          <div className="flex flex-col gap-1">
             <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Airspeed
             </dt>
