@@ -52,12 +52,15 @@ const LABEL_CLASS =
 
 const VALUE_LEADING = "leading-tight";
 
-// Why: each hero row pads to the same number of cells so the three
-// panels visually align. Flight numbers can run up to 7 chars
-// (PGR1390); airports are 3 chars. Pad both to 7 → all three split-
-// flap panels render with 7 cell positions, content centered inside
-// via the SplitFlapDisplay's padDirection.
-const HERO_CELL_LENGTH = 7;
+// Why: cell counts per hero row. Flight numbers can run up to 7 chars
+// (PGR1390); airport codes are 3 chars (IATA) or 4 (FAA LIDs like
+// 1CA9). With the three rows arranged in a horizontal grid where each
+// column has equal width, the cell counts vary per panel but content
+// centers inside its column — so airports look "tighter" than the
+// flight panel, with the surrounding panel aligned to the same outer
+// dimensions.
+const FLIGHT_CELL_LENGTH = 7;
+const AIRPORT_CELL_LENGTH = 4;
 
 // Why: bearing from home base to the flight, mapped to a 16-point compass.
 function getCompassBearingLabel(
@@ -123,24 +126,31 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 
       {flight ? (
         <>
-          {/* Hero rows — three equal-size split-flap panels */}
-          <div className="flex flex-col gap-2.5">
-            <HeroRow
+          {/* Hero rows — three equal-width split-flap panels in a
+              horizontal grid. Each column gets the same width via
+              grid-cols-3; content inside is centered, so a 3-letter
+              airport code in a column shaped for 7-cell flight
+              numbers reads as "centered in its slot." */}
+          <div className="grid grid-cols-3 gap-2">
+            <HeroPanel
               label="Flight"
               value={getPrimaryIdentifier(flight).toUpperCase()}
+              cells={FLIGHT_CELL_LENGTH}
               charSet="alphanumeric"
             />
-            <HeroRow
+            <HeroPanel
               label="From"
               value={isShortAirportCode(flight.origin) ? flight.origin : ""}
+              cells={AIRPORT_CELL_LENGTH}
               fallback={!isShortAirportCode(flight.origin) ? flight.origin : null}
               charSet="alphanumericExtra"
             />
-            <HeroRow
+            <HeroPanel
               label="To"
               value={
                 isShortAirportCode(flight.destination) ? flight.destination : ""
               }
+              cells={AIRPORT_CELL_LENGTH}
               fallback={
                 !isShortAirportCode(flight.destination) ? flight.destination : null
               }
@@ -191,51 +201,53 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 function AmbientShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="dark pointer-events-none fixed top-4 left-1/2 z-30 -translate-x-1/2">
-      <div className="pointer-events-auto flex w-96 flex-col gap-3 rounded-lg border border-border bg-card px-4 py-4 text-card-foreground shadow-2xl">
+      <div className="pointer-events-auto flex w-[28rem] flex-col gap-3 rounded-lg border border-border bg-card px-4 py-4 text-card-foreground shadow-2xl">
         {children}
       </div>
     </div>
   );
 }
 
-// Why: shared shape for the three hero rows. Each renders a label
-// above a full-width split-flap panel. Content is centered inside
-// the fixed-cell-count display so a 3-letter airport code reads as
-// "centered in its slot" rather than "left-aligned with empty
-// trailing cells."
-function HeroRow({
+// Why: one of the three hero panels (FLIGHT / FROM / TO). Renders a
+// label above a split-flap panel. Inside a grid-cols-3 parent, the
+// columns share equal width — content centers within. Cell counts
+// vary per column (7 for flight, 4 for airports) since airport codes
+// are inherently shorter; the surrounding panel sizes stay aligned
+// because the grid forces equal column widths.
+function HeroPanel({
   label,
   value,
+  cells,
   charSet,
   fallback
 }: {
   label: string;
   value: string;
+  cells: number;
   charSet: "alphanumeric" | "alphanumericExtra" | "alpha" | "numeric";
   fallback?: string | null;
 }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1">
       <p className={LABEL_CLASS}>{label}</p>
-      <div className="flex items-center justify-center rounded-md bg-background px-3 py-2 text-foreground shadow-inner ring-1 ring-border/30">
+      <div className="flex h-12 items-center justify-center overflow-hidden rounded-md bg-background px-2 text-foreground shadow-inner ring-1 ring-border/30">
         {fallback ? (
           // Why: long readable names (LAPD Hooper Heliport, Cedars-
-          // Sinai Medical Center) don't fit in 7 split-flap cells —
-          // fall back to plain text in the same panel slot, centered
-          // and at the same vertical height so panel sizes stay
-          // equal across rows.
-          <p className="truncate text-2xl font-semibold tracking-wider">
+          // Sinai Medical Center) don't fit in a 4-cell split-flap —
+          // fall back to plain text in the same panel slot. The
+          // fixed h-12 keeps panel heights aligned across the row.
+          <p className="truncate text-sm font-semibold leading-tight tracking-wider">
             {fallback}
           </p>
         ) : (
           <SplitFlapDisplay
             value={value}
             charSet={charSet}
-            length={HERO_CELL_LENGTH}
+            length={cells}
             padDirection="end"
             cycleMs={45}
             flipMs={300}
-            className="text-2xl font-semibold tracking-wider"
+            className="text-xl font-semibold tracking-wider"
           />
         )}
       </div>
