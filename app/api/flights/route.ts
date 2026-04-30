@@ -8,6 +8,11 @@ import {
 } from "@/lib/flights/aeroapiDiscovery";
 import { hasOpenSkyCredentials } from "@/lib/flights/openskyAuth";
 import { fetchOpenSkyFlights } from "@/lib/flights/opensky";
+import {
+  backfillFaaOwnerAsync,
+  getCachedFaaOwner
+} from "@/lib/flights/faaInquiry";
+import { looksLikeManufacturerName } from "@/lib/flights/display";
 import type { Flight } from "@/lib/flights/types";
 
 export const revalidate = 0;
@@ -160,6 +165,31 @@ function jsonResponse(
   });
 }
 
+// Why: ADSBdb / AeroAPI / adsb.lol all leave registeredOwner null for some
+// active aircraft, especially law-enforcement helicopters. The FAA's web
+// inquiry covers the gap, but it's a per-tail HTTP fetch — we can't block
+// the bulk feed on it. So this is a two-pass enrichment: synchronously
+// read from the FAA-owner cache (instant for every previously-seen tail),
+// and fire off background lookups for any unknowns so the next poll has
+// the answer. Also overrides upstream values that look like manufacturer
+// ringers ("Airbus Helicopters") since those aren't real operators.
+function enrichFlightsWithFaaOwners(flights: Flight[]): Flight[] {
+  return flights.map((flight) => {
+    const upstream = flight.registeredOwner;
+    const upstreamUsable =
+      upstream != null && upstream.trim() !== "" && !looksLikeManufacturerName(upstream);
+    if (upstreamUsable) {
+      return flight;
+    }
+    const cached = getCachedFaaOwner(flight.callsign);
+    if (cached != null) {
+      return { ...flight, registeredOwner: cached };
+    }
+    backfillFaaOwnerAsync(flight.callsign);
+    return flight;
+  });
+}
+
 export async function GET(request: NextRequest) {
   const parsed = parseArea(request);
 
@@ -181,7 +211,7 @@ export async function GET(request: NextRequest) {
         const flights = await fetchAeroApiDiscoveryFlights(area);
         setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
         return jsonResponse(
-          { source: "aeroapi-discovery", center: area.center, radiusMiles: area.radiusMiles, flights },
+          { source: "aeroapi-discovery", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(flights) },
           { cacheControl: FRESH_CACHE_HEADER }
         );
       } catch (error) {
@@ -192,7 +222,7 @@ export async function GET(request: NextRequest) {
     const cachedFlights = getCachedFeed(area);
     return cachedFlights
       ? jsonResponse(
-          { source: "aeroapi-stale", center: area.center, radiusMiles: area.radiusMiles, flights: cachedFlights },
+          { source: "aeroapi-stale", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(cachedFlights) },
           { cacheControl: STALE_CACHE_HEADER }
         )
       : jsonResponse(
@@ -218,7 +248,7 @@ export async function GET(request: NextRequest) {
       // Genuine adsb.lol failures throw and fall through via the catch.
       setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
       return jsonResponse(
-        { source: "adsblol", center: area.center, radiusMiles: area.radiusMiles, flights },
+        { source: "adsblol", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(flights) },
         { cacheControl: FRESH_CACHE_HEADER }
       );
     } catch (error) {
@@ -232,7 +262,7 @@ export async function GET(request: NextRequest) {
       const flights = await fetchOpenSkyFlights(area, { warmAeroApiFeed: warmFeedMetadata });
       setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
       return jsonResponse(
-        { source: "opensky", center: area.center, radiusMiles: area.radiusMiles, flights },
+        { source: "opensky", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(flights) },
         { cacheControl: FRESH_CACHE_HEADER }
       );
     } catch (error) {
@@ -248,7 +278,7 @@ export async function GET(request: NextRequest) {
         source: tryAdsbLol ? "adsblol-stale" : "opensky-stale",
         center: area.center,
         radiusMiles: area.radiusMiles,
-        flights: cachedFlights
+        flights: enrichFlightsWithFaaOwners(cachedFlights)
       },
       { cacheControl: STALE_CACHE_HEADER }
     );

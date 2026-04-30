@@ -9,7 +9,27 @@ import { fetchAdsbLolSelectedFlightTrack } from "@/lib/flights/adsblol";
 import { fetchOpenSkySelectedFlightTrack } from "@/lib/flights/openskyTrack";
 import { hasCommercialFlightIdentity } from "@/lib/flights/scoring";
 import { inferOriginFromTrack } from "@/lib/flights/trackInference";
+import { lookupFaaOwner } from "@/lib/flights/faaInquiry";
+import { looksLikeManufacturerName } from "@/lib/flights/display";
 import type { Flight } from "@/lib/flights/types";
+
+// Why: when ADSBdb / AeroAPI / adsb.lol all leave registeredOwner null
+// (or return a manufacturer ringer like "Airbus Helicopters" that we know
+// isn't a real operator), fall back to the FAA's web inquiry. Cached
+// inside lookupFaaOwner so the cost is paid at most once per N-number per
+// 24h. Selected-flight enrichment is per-click, so a one-shot await is
+// fine — the bulk feed handles its FAA fallback non-blockingly.
+async function resolveOwnerWithFaaFallback(
+  upstreamOwner: string | null | undefined,
+  callsign: string
+): Promise<string | null> {
+  const upstream = upstreamOwner ?? null;
+  if (upstream != null && upstream.trim() !== "" && !looksLikeManufacturerName(upstream)) {
+    return upstream;
+  }
+  const faa = await lookupFaaOwner(callsign);
+  return faa ?? upstream;
+}
 
 export const revalidate = 0;
 
@@ -201,6 +221,15 @@ export async function GET(request: NextRequest) {
         : null;
     const finalOrigin = upstreamOrigin ?? trackInferredOrigin;
 
+    const resolvedOwner = !hasAnyData
+      ? null
+      : await resolveOwnerWithFaaFallback(
+          trustedAeroApiMetadata?.registeredOwner ??
+            adsbdbMetadata?.registeredOwner ??
+            flight.registeredOwner,
+          flight.callsign
+        );
+
     const mergedDetails = !hasAnyData
       ? null
       : {
@@ -226,10 +255,7 @@ export async function GET(request: NextRequest) {
             trustedAeroApiMetadata?.registration ??
             adsbdbMetadata?.registration ??
             flight.registration,
-          registeredOwner:
-            trustedAeroApiMetadata?.registeredOwner ??
-            adsbdbMetadata?.registeredOwner ??
-            flight.registeredOwner,
+          registeredOwner: resolvedOwner,
           status: trustedAeroApiMetadata?.status ?? null,
           track: selectedTrack
         };
@@ -286,27 +312,34 @@ export async function GET(request: NextRequest) {
       const fallbackTrack =
         adsbLolTrack.length > 0 ? adsbLolTrack : openSkyTrack;
 
-      const fallbackDetails =
-        adsbdbMetadata || fallbackTrack.length > 0
-          ? {
-              aircraftType: adsbdbMetadata?.aircraftType ?? flight.aircraftType,
-              airline:
-                (flight.flightNumber == null ? adsbdbMetadata?.airline : null) ?? flight.airline,
-              destination:
-                (flight.flightNumber == null ? adsbdbMetadata?.destination : null) ??
-                flight.destination,
-              faFlightId: null,
-              flightNumber:
-                (flight.flightNumber == null ? adsbdbMetadata?.flightNumber : null) ??
-                flight.flightNumber,
-              origin:
-                (flight.flightNumber == null ? adsbdbMetadata?.origin : null) ?? flight.origin,
-              registration: adsbdbMetadata?.registration ?? flight.registration,
-              registeredOwner: adsbdbMetadata?.registeredOwner ?? flight.registeredOwner,
-              status: null,
-              track: fallbackTrack
-            }
-          : null;
+      const fallbackHasData = adsbdbMetadata != null || fallbackTrack.length > 0;
+      const fallbackResolvedOwner = fallbackHasData
+        ? await resolveOwnerWithFaaFallback(
+            adsbdbMetadata?.registeredOwner ?? flight.registeredOwner,
+            flight.callsign
+          )
+        : null;
+
+      const fallbackDetails = fallbackHasData
+        ? {
+            aircraftType: adsbdbMetadata?.aircraftType ?? flight.aircraftType,
+            airline:
+              (flight.flightNumber == null ? adsbdbMetadata?.airline : null) ?? flight.airline,
+            destination:
+              (flight.flightNumber == null ? adsbdbMetadata?.destination : null) ??
+              flight.destination,
+            faFlightId: null,
+            flightNumber:
+              (flight.flightNumber == null ? adsbdbMetadata?.flightNumber : null) ??
+              flight.flightNumber,
+            origin:
+              (flight.flightNumber == null ? adsbdbMetadata?.origin : null) ?? flight.origin,
+            registration: adsbdbMetadata?.registration ?? flight.registration,
+            registeredOwner: fallbackResolvedOwner,
+            status: null,
+            track: fallbackTrack
+          }
+        : null;
 
       return jsonResponse(
         {
