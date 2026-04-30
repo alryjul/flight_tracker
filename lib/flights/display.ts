@@ -286,8 +286,8 @@ export function formatScheduleTime(
 // yet). Returns null when the flight has no schedule data at all.
 //
 // Time is formatted in the origin airport's timezone when available
-// — so a BUR→JFK flight reads "Dep 3:45 PM PT" (BUR's zone), not
-// the viewer's zone.
+// — so a BUR→JFK flight reads "Dep 15:45 PT" (BUR's zone), not the
+// viewer's zone.
 export type ScheduleTimes = {
   scheduledOut: string | null;
   estimatedOut: string | null;
@@ -303,6 +303,54 @@ export type ScheduleTimeDisplay = {
   label: string;
   time: string;
 };
+
+// Why: helper to format an ISO timestamp as YYYY-MM-DD in a given
+// timezone. Used for computing calendar-day deltas between departure
+// and arrival across timezones (long-haul + cross-IDL flights). Uses
+// the en-CA locale because it produces YYYY-MM-DD by default, which
+// is parseable by `new Date()` deterministically.
+function getCalendarDateInTimezone(
+  iso: string,
+  timezone: string | null
+): string | null {
+  try {
+    const date = new Date(iso);
+    if (Number.isNaN(date.valueOf())) return null;
+    return new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      ...(timezone ? { timeZone: timezone } : {})
+    }).format(date);
+  } catch {
+    return null;
+  }
+}
+
+// Why: number of calendar days the displayed arrival time is past the
+// displayed departure time, computed in each airport's local
+// timezone. For LAX→JFK (same calendar day) returns 0. For LAX→NRT
+// (lands the next day in JST) returns 1. For LAX→SYD (lands two days
+// later in AEST due to crossing the international date line) returns
+// 2. Returns 0 when we can't compute (missing times or timezones)
+// so the suffix simply doesn't render.
+function getRouteDayDelta(times: ScheduleTimes): number {
+  const depIso = times.actualOut ?? times.estimatedOut ?? times.scheduledOut;
+  const arrIso = times.actualIn ?? times.estimatedIn ?? times.scheduledIn;
+  if (!depIso || !arrIso) return 0;
+
+  const depDate = getCalendarDateInTimezone(depIso, times.originTimezone);
+  const arrDate = getCalendarDateInTimezone(arrIso, times.destinationTimezone);
+  if (!depDate || !arrDate) return 0;
+
+  // Both are YYYY-MM-DD strings; parsing as UTC midnight gives a
+  // clean ms-per-day arithmetic baseline. We don't care about
+  // sub-day precision here — only the calendar-day delta.
+  const depMs = Date.parse(`${depDate}T00:00:00Z`);
+  const arrMs = Date.parse(`${arrDate}T00:00:00Z`);
+  if (Number.isNaN(depMs) || Number.isNaN(arrMs)) return 0;
+  return Math.round((arrMs - depMs) / 86_400_000);
+}
 
 export function getDepartureTimeDisplay(
   times: ScheduleTimes
@@ -325,19 +373,28 @@ export function getDepartureTimeDisplay(
 // happened), "ETA" for estimated arrival (in-flight prediction),
 // "Sched" for the original schedule (pre-departure or no
 // estimate yet). Time is formatted in the destination airport's
-// timezone — JFK arrival reads "ETA 7:58 PM ET".
+// timezone — JFK arrival reads "ETA 19:58 ET".
+//
+// For long-haul / cross-IDL flights where the arrival lands on a
+// later calendar day than the departure (in their respective
+// timezones), appends "+Nd" so the user can see at a glance that
+// the time isn't same-day. LAX → NRT reads "ETA 17:30 JST +1d";
+// LAX → SYD reads "ETA 06:30 AEST +2d".
 export function getArrivalTimeDisplay(
   times: ScheduleTimes
 ): ScheduleTimeDisplay | null {
   const tz = times.destinationTimezone;
+  const dayDelta = getRouteDayDelta(times);
+  const dayDeltaSuffix = dayDelta > 0 ? ` +${dayDelta}d` : "";
+
   const actual = formatScheduleTime(times.actualIn, tz);
-  if (actual) return { label: "Arr", time: actual };
+  if (actual) return { label: "Arr", time: `${actual}${dayDeltaSuffix}` };
 
   const estimated = formatScheduleTime(times.estimatedIn, tz);
-  if (estimated) return { label: "ETA", time: estimated };
+  if (estimated) return { label: "ETA", time: `${estimated}${dayDeltaSuffix}` };
 
   const scheduled = formatScheduleTime(times.scheduledIn, tz);
-  if (scheduled) return { label: "Sched", time: scheduled };
+  if (scheduled) return { label: "Sched", time: `${scheduled}${dayDeltaSuffix}` };
 
   return null;
 }
