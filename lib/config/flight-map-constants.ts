@@ -69,7 +69,7 @@ export const MAX_POSITION_JITTER_DEADBAND_MILES = 0.12;
 // Tuning intuition: bigger τ = laxer chase = more lag, more glide.
 // Smaller τ = stiffer chase = less lag, more reactive (visible "snaps" on
 // turns at very small τ). 6 s is the "ambient buttery glide" sweet spot.
-export const SPRING_TAU_SEC = 8;
+export const SPRING_TAU_SEC = 10;
 // Why: on page load (or when a flight first enters the viewport), the
 // spring has nowhere to chase if from = target — icons sit static until the
 // next poll lands. We bootstrap by extrapolating the target forward by
