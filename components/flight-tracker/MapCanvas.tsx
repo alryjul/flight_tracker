@@ -1,7 +1,7 @@
 "use client";
 
 import "maplibre-gl/dist/maplibre-gl.css";
-import { memo, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map as MapLibreMap } from "maplibre-gl";
 import { useTheme } from "next-themes";
 import { distanceBetweenPointsMiles } from "@/lib/geo";
@@ -362,7 +362,7 @@ type MapCanvasProps = {
   onHoverFlight: (state: HoveredFlightState | null) => void;
 };
 
-function MapCanvasImpl({
+export function MapCanvas({
   homeBase,
   homeBaseFeatures,
   openingBounds,
@@ -907,12 +907,3 @@ function MapCanvasImpl({
     </main>
   );
 }
-
-// Why: orchestrator re-renders on every poll (flights state changes) and on
-// hover/select state changes. MapCanvas's actual props change rarely —
-// homeBase/Features/openingBounds are useMemo'd, the 16 mutable refs are
-// stable identities, and the callbacks (setSelectedFlightId / setHoveredFlight)
-// are stable React state setters. Default shallow compare is the right thing
-// here. Without this, MapCanvas's render function (and the useTheme + ref
-// mirror) ran every poll for nothing.
-export const MapCanvas = memo(MapCanvasImpl);
