@@ -132,6 +132,39 @@ export function looksLikeAgencyLabel(value: string | null) {
   return /(POLICE|SHERIFF|FIRE|PATROL|AIR SUPPORT|DEPARTMENT)/i.test(value);
 }
 
+// Why: registered-owner strings that sound like aviation businesses
+// (helitour outfits, charter companies, leasing/management firms, flight
+// schools) are *operators* even when their pilots fly under tail-number
+// callsigns. Helinet Aviation Services is operating its helicopters,
+// not just owning them. We use this to keep "Operator" instead of
+// degrading to "Owner" for these cases. False positives are bounded —
+// a one-plane "SMITH AVIATION LLC" pass-through reading "Operator" is
+// no worse than reading "Owner"; the inverse (Helinet reading "Owner")
+// was actively wrong.
+const AVIATION_BUSINESS_KEYWORDS = [
+  "AVIATION",
+  "AIRWAYS",
+  "HELICOPTER", // covers HELICOPTER, HELICOPTERS
+  "AIR SERVICE", // covers AIR SERVICE, AIR SERVICES
+  "AIR TOUR", // covers AIR TOUR, AIR TOURS
+  "AIR CHARTER",
+  "CHARTER",
+  "FLIGHT SCHOOL",
+  "FLIGHT ACADEMY",
+  "PILOT ACADEMY",
+  "AIRCRAFT LEASING",
+  "AIR MEDICAL"
+];
+
+export function looksLikeAviationBusinessLabel(value: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  return AVIATION_BUSINESS_KEYWORDS.some((keyword) => normalized.includes(keyword));
+}
+
 // Why: a transient null/missing squawk between confirmed VFR squawks
 // shouldn't flip the strip card from "VFR" → "Route pending" → "VFR".
 // We latch the "VFR" status for an identity for a short window; once
@@ -258,13 +291,20 @@ export function getOperatorLabelTitle(flight: Flight) {
     return "Agency";
   }
 
-  // Why: when a flight's callsign is just its tail number and there's
-  // no operating airline string, "Owner" reads more honestly than
-  // "Operator" — it's typically a person, LLC, flying club, or flight
-  // school whose name appears via the registered-owner field. Saying
-  // "Operator: John Smith" implies a commercial operation; "Owner: John
-  // Smith" matches reality.
-  if (operatorLabel && !flight.airline && isFlyingUnderTailNumber(flight)) {
+  // Why: when a flight's callsign is just its tail number, there's no
+  // operating airline string, AND the owner string doesn't read like an
+  // aviation business, "Owner" is more honest than "Operator" — it's
+  // typically a person, holding LLC, or flying club whose name appears
+  // via the registered-owner field. Helitour/charter/leasing companies
+  // (Helinet Aviation Services, Group 3 Aviation) ARE running an
+  // operation even when their pilots use N-number callsigns, so the
+  // aviation-business gate keeps them as "Operator".
+  if (
+    operatorLabel &&
+    !flight.airline &&
+    isFlyingUnderTailNumber(flight) &&
+    !looksLikeAviationBusinessLabel(operatorLabel)
+  ) {
     return "Owner";
   }
 
