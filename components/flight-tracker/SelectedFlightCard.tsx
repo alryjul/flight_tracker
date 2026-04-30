@@ -20,6 +20,7 @@ import {
   formatAirspeed,
   formatAltitude,
   getIdentifierLabel,
+  getMeaningfulFlightStatus,
   getOperatorLabel,
   getOperatorLabelTitle,
   getPrimaryIdentifier,
@@ -136,6 +137,10 @@ function SelectedFlightCardImpl({
     getPrimaryIdentifier(flight) !== flight.registration;
   const ownerLabel = normalizeRegisteredOwnerLabel(flight.registeredOwner);
   const showOwner = ownerLabel != null && ownerLabel !== operatorLabel;
+  // Why: the status badge hides the "everything's fine" airborne states
+  // (En Route / On Time) and only renders for signal-bearing values —
+  // ground transitions, deviations, timeliness drift. See display.ts.
+  const meaningfulStatus = getMeaningfulFlightStatus(details?.status);
 
   return (
     <Card className="mx-1 mt-2 mb-2 shrink-0 gap-3 py-3">
@@ -158,10 +163,8 @@ function SelectedFlightCardImpl({
             <Badge variant="secondary" className="text-[10px]">
               {flight.aircraftType ?? "Unknown type"}
             </Badge>
-            {details?.status ? (
-              <Badge className="text-[10px]">
-                {details.status}
-              </Badge>
+            {meaningfulStatus ? (
+              <Badge className="text-[10px]">{meaningfulStatus}</Badge>
             ) : null}
           </div>
         </div>

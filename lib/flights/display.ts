@@ -337,6 +337,33 @@ export function looksLikeGeneralAviationFlight(flight: Flight) {
   return /^N\d+[A-Z]{0,2}$/.test(callsign);
 }
 
+// Why: AeroAPI's status field defaults to "En Route" / "En Route / On
+// Time" for any airborne flight that's running normally — which is
+// obvious from the fact that the user is looking at a moving dot on
+// the map. Showing the badge in that case is pure noise. Filter the
+// "everything's fine, the plane is flying" states out so the badge
+// only renders when status carries actual signal: ground transitions
+// (Taxiing, Landed, Arrived), schedule deviations (Delayed, Diverted,
+// Cancelled), or timeliness drift (the "Late N min" / "Early N min"
+// suffixes AeroAPI appends).
+//
+// "On Time" alone is treated the same as "En Route / On Time" — it
+// shows up occasionally as a bare value and is equally uninformative
+// for a flight the user is already watching.
+const BORING_FLIGHT_STATUSES = new Set([
+  "en route",
+  "en route / on time",
+  "on time"
+]);
+
+export function getMeaningfulFlightStatus(status: string | null | undefined) {
+  if (!status) return null;
+  const normalized = status.trim();
+  if (normalized.length === 0) return null;
+  if (BORING_FLIGHT_STATUSES.has(normalized.toLowerCase())) return null;
+  return normalized;
+}
+
 export function getGroundStatusLabel(status: string | null | undefined) {
   const normalizedStatus = status?.trim().toLowerCase() ?? "";
 
