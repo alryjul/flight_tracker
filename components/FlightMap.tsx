@@ -16,6 +16,40 @@ import {
 } from "@/lib/flights/scoring";
 import { isOperatingVfr } from "@/lib/flights/squawk";
 import type { AeroApiFeedMetadata } from "@/lib/flights/aeroapi";
+import {
+  formatAirspeed,
+  formatAltitude,
+  getAircraftTypeFamily,
+  getCompactRouteLabel,
+  getHoverSubtitle,
+  getIdentifierLabel,
+  getListSecondaryLeft,
+  getOperatorLabel,
+  getOperatorLabelTitle,
+  getPrimaryIdentifier,
+  getRouteLabel,
+  getSecondaryIdentifier,
+  getStripRouteLabel,
+  isFlightVfrForLabel,
+  looksLikeAgencyLabel,
+  looksLikeGeneralAviationFlight,
+  looksLikeManufacturerName,
+  normalizeRegisteredOwnerLabel,
+  refreshVfrLatchIfApplicable
+} from "@/lib/flights/display";
+import { getFlightMetricHistory, getMetricTrend } from "@/lib/flights/metrics";
+import {
+  getFlightPositionSnapshotKey,
+  getFlightProviderTimestampSec,
+  getIdentityScopedValue,
+  getLiveFlightIdentityKey
+} from "@/lib/flights/identity";
+import {
+  arraysMatch,
+  getRankChanges,
+  pinSelectedFlightOrder,
+  reconcileFlightOrder
+} from "@/lib/flights/ordering";
 import { cn } from "@/lib/utils";
 import {
   Sidebar,
@@ -316,66 +350,6 @@ function buildOpeningBounds(center: HomeBaseCenter, radiusMiles: number): LngLat
   ];
 }
 
-function getPrimaryIdentifier(flight: Flight) {
-  return flight.flightNumber ?? flight.registration ?? flight.callsign;
-}
-
-function getIdentifierLabel(flight: Flight) {
-  if (flight.flightNumber) {
-    return "Flight";
-  }
-
-  if (flight.registration) {
-    return "Registration";
-  }
-
-  return "Callsign";
-}
-
-function getSecondaryIdentifier(flight: Flight) {
-  if (flight.flightNumber) {
-    return flight.callsign;
-  }
-
-  if (flight.registration && flight.callsign !== flight.registration) {
-    return flight.callsign;
-  }
-
-  return null;
-}
-
-function getRouteLabel(flight: Flight) {
-  if (flight.origin && flight.destination) {
-    return `${flight.origin} to ${flight.destination}`;
-  }
-
-  if (flight.origin) {
-    return `From ${flight.origin}`;
-  }
-
-  if (flight.destination) {
-    return `To ${flight.destination}`;
-  }
-
-  return null;
-}
-
-function getCompactRouteLabel(flight: Flight) {
-  if (flight.origin && flight.destination) {
-    return `${flight.origin} > ${flight.destination}`;
-  }
-
-  if (flight.origin) {
-    return `From ${flight.origin}`;
-  }
-
-  if (flight.destination) {
-    return `To ${flight.destination}`;
-  }
-
-  return null;
-}
-
 function getFeedMetadataMerge(
   flight: Flight,
   details:
@@ -412,325 +386,6 @@ function getFeedMetadataMerge(
   return metadata;
 }
 
-function looksLikeManufacturerName(value: string | null) {
-  if (!value) {
-    return false;
-  }
-
-  const normalized = value.trim().toUpperCase();
-  const manufacturerPrefixes = [
-    "AIRBUS",
-    "AGUSTA",
-    "BEECH",
-    "BEECHCRAFT",
-    "BELL",
-    "BOEING",
-    "BOMBARDIER",
-    "CESSNA",
-    "DIAMOND",
-    "EMBRAER",
-    "EUROCOPTER",
-    "GULFSTREAM",
-    "LEONARDO",
-    "MCDONNELL DOUGLAS",
-    "PILATUS",
-    "PIPER",
-    "ROBINSON",
-    "SIKORSKY",
-    "TEXTRON"
-  ];
-
-  return manufacturerPrefixes.some((prefix) => normalized.startsWith(prefix));
-}
-
-function normalizeRegisteredOwnerLabel(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  const trimmedValue = value.trim();
-  const normalized = trimmedValue.toUpperCase();
-
-  if (looksLikeManufacturerName(trimmedValue)) {
-    return null;
-  }
-
-  if (/^LAPD AIR SUPPORT DIVISION$/.test(normalized)) {
-    return "LAPD Air Support";
-  }
-
-  if (/^LOS ANGELES POLICE DEPARTMENT$/.test(normalized)) {
-    return "Los Angeles Police Department";
-  }
-
-  if (/^LOS ANGELES COUNTY SHERIFFS DEPARTMENT$/.test(normalized)) {
-    return "LA County Sheriff's Department";
-  }
-
-  if (/^CALIFORNIA HIGHWAY PATROL$/.test(normalized)) {
-    return "California Highway Patrol";
-  }
-
-  return trimmedValue;
-}
-
-function looksLikeAgencyLabel(value: string | null) {
-  if (!value) {
-    return false;
-  }
-
-  return /(POLICE|SHERIFF|FIRE|PATROL|AIR SUPPORT|DEPARTMENT)/i.test(value);
-}
-
-// Why: a transient null/missing squawk between confirmed VFR squawks
-// shouldn't flip the strip card from "VFR" → "Route pending" → "VFR".
-// We latch the "VFR" status for an identity for a short window; once
-// the squawk transitions to a real non-VFR code the latch is broken
-// (the aircraft is genuinely no longer VFR).
-const VFR_LATCH_DURATION_MS = 30_000;
-// Why: cap the latch map. Long-running sessions accumulate entries as
-// aircraft come and go (and identityKey changes on callsign reassign).
-// Without this the map grows unbounded.
-const VFR_LATCH_MAX_ENTRIES = 200;
-const vfrLatchedAtByIdentity = new Map<string, number>();
-
-function getVfrLatchKey(flight: Flight) {
-  return getLiveFlightIdentityKey(flight);
-}
-
-function refreshVfrLatchIfApplicable(flight: Flight) {
-  if (isOperatingVfr(flight)) {
-    const key = getVfrLatchKey(flight);
-    // delete-then-set bubbles to "most recent" in insertion order so
-    // active aircraft don't LRU-evict.
-    vfrLatchedAtByIdentity.delete(key);
-    if (vfrLatchedAtByIdentity.size >= VFR_LATCH_MAX_ENTRIES) {
-      const oldest = vfrLatchedAtByIdentity.keys().next().value;
-      if (oldest !== undefined) {
-        vfrLatchedAtByIdentity.delete(oldest);
-      }
-    }
-    vfrLatchedAtByIdentity.set(key, performance.now());
-  }
-}
-
-function isFlightVfrForLabel(flight: Flight) {
-  if (isOperatingVfr(flight)) return true;
-  // Real non-VFR squawk → break the latch (aircraft transitioned).
-  const squawk = flight.squawk?.trim();
-  if (squawk && squawk.length > 0) return false;
-  // Squawk is null/missing → may be a transponder cycle. Honor the
-  // recent-VFR latch.
-  const latchedAt = vfrLatchedAtByIdentity.get(getVfrLatchKey(flight));
-  if (latchedAt == null) return false;
-  return performance.now() - latchedAt <= VFR_LATCH_DURATION_MS;
-}
-
-function getRouteFallbackLabel(flight: Flight) {
-  if (isFlightVfrForLabel(flight)) {
-    return "VFR";
-  }
-  // Why: previously "Local flight" for GA, "Route pending" for commercial.
-  // Confusing because "Local flight" reads like a status assertion when
-  // really it just meant "no route data." Unified to "Route pending" —
-  // honest about the state (we tried, nothing yet) without implying a
-  // category about the flight.
-  return "Route pending";
-}
-
-function getStripRouteLabel(flight: Flight) {
-  const routeLabel = getRouteLabel(flight);
-
-  if (routeLabel) {
-    return routeLabel;
-  }
-
-  if (flight.flightNumber) {
-    return "Route pending";
-  }
-
-  return getRouteFallbackLabel(flight);
-}
-
-function getHoverSubtitle(flight: Flight) {
-  return getCompactRouteLabel(flight) ?? getSecondaryIdentifier(flight) ?? formatAltitude(flight.altitudeFeet);
-}
-
-function getOperatorLabel(flight: Flight) {
-  const airline = flight.airline?.trim() ?? null;
-  const registeredOwner = normalizeRegisteredOwnerLabel(flight.registeredOwner);
-
-  if (airline && !looksLikeManufacturerName(airline)) {
-    return airline;
-  }
-
-  return registeredOwner ?? null;
-}
-
-function getOperatorLabelTitle(flight: Flight) {
-  const airline = flight.airline?.trim() ?? null;
-  const operatorLabel = getOperatorLabel(flight);
-
-  if (operatorLabel && airline && operatorLabel === airline && hasCommercialFlightIdentity(flight)) {
-    return "Airline";
-  }
-
-  if (looksLikeAgencyLabel(operatorLabel)) {
-    return "Agency";
-  }
-
-  return "Operator";
-}
-
-function getListSecondaryLeft(flight: Flight) {
-  return getOperatorLabel(flight) ?? flight.callsign;
-}
-
-function getAircraftTypeFamily(flight: Flight) {
-  const type = flight.aircraftType?.toUpperCase() ?? "";
-
-  if (type.startsWith("H")) {
-    return "helicopter";
-  }
-
-  if (type.startsWith("C") || type.startsWith("PA") || type.startsWith("BE")) {
-    return "general-aviation";
-  }
-
-  if (
-    type.startsWith("E13") ||
-    type.startsWith("E14") ||
-    type.startsWith("CRJ") ||
-    type.startsWith("AT7")
-  ) {
-    return "regional";
-  }
-
-  if (
-    type.startsWith("GLF") ||
-    type.startsWith("C25") ||
-    type.startsWith("LJ") ||
-    type.startsWith("CL")
-  ) {
-    return "business-jet";
-  }
-
-  if (type.startsWith("A") || type.startsWith("B7") || type.startsWith("B3") || type.startsWith("MD")) {
-    return "airliner";
-  }
-
-  return "unknown";
-}
-
-function looksLikeGeneralAviationFlight(flight: Flight) {
-  const callsign = flight.callsign.trim().toUpperCase();
-  const registration = flight.registration?.trim().toUpperCase() ?? null;
-
-  if (registration?.startsWith("N")) {
-    return true;
-  }
-
-  return /^N\d+[A-Z]{0,2}$/.test(callsign);
-}
-
-function getGroundStatusLabel(status: string | null | undefined) {
-  const normalizedStatus = status?.trim().toLowerCase() ?? "";
-
-  if (normalizedStatus.includes("taxi")) {
-    return "Taxiing";
-  }
-
-  if (
-    normalizedStatus.includes("landed") ||
-    normalizedStatus.includes("arrived") ||
-    normalizedStatus.includes("on ground")
-  ) {
-    return "Landed";
-  }
-
-  return null;
-}
-
-function formatAltitude(altitudeFeet: number | null, status?: string | null) {
-  if (altitudeFeet != null) {
-    return `${altitudeFeet.toLocaleString()} ft`;
-  }
-
-  return getGroundStatusLabel(status) ?? "Altitude unknown";
-}
-
-function formatAirspeed(groundspeedKnots: number | null) {
-  return groundspeedKnots == null ? "Speed unknown" : `${groundspeedKnots.toLocaleString()} kt`;
-}
-
-function getMetricTrend(
-  values: Array<number | null>,
-  threshold: number
-): TrendDirection {
-  const meaningfulValues = values.filter((value): value is number => value != null);
-
-  if (meaningfulValues.length < MIN_METRIC_TREND_POINTS) {
-    return null;
-  }
-
-  const firstValue = meaningfulValues[0]!;
-  const lastValue = meaningfulValues[meaningfulValues.length - 1]!;
-  const netDelta = lastValue - firstValue;
-
-  if (Math.abs(netDelta) < threshold) {
-    return null;
-  }
-
-  const direction: TrendDirection = netDelta > 0 ? "up" : "down";
-  const stepThreshold = Math.max(1, threshold * 0.3);
-  let alignedSteps = 0;
-  let opposingSteps = 0;
-
-  for (let index = 1; index < meaningfulValues.length; index += 1) {
-    const delta = meaningfulValues[index]! - meaningfulValues[index - 1]!;
-
-    if (Math.abs(delta) < stepThreshold) {
-      continue;
-    }
-
-    if (delta > 0) {
-      if (direction === "up") {
-        alignedSteps += 1;
-      } else {
-        opposingSteps += 1;
-      }
-    } else if (direction === "down") {
-      alignedSteps += 1;
-    } else {
-      opposingSteps += 1;
-    }
-  }
-
-  if (alignedSteps === 0) {
-    return null;
-  }
-
-  return alignedSteps >= opposingSteps ? direction : null;
-}
-
-function getFlightMetricHistory(
-  snapshots: FlightSnapshot[],
-  flight: Pick<Flight, "id" | "callsign">,
-  getValue: (flight: Flight) => number | null
-) {
-  const identityKey = getLiveFlightIdentityKey(flight);
-  const now = performance.now();
-
-  return snapshots
-    .filter((snapshot) => now - snapshot.capturedAt <= METRIC_TREND_LOOKBACK_MS)
-    .map((snapshot) => snapshot.flightsById.get(flight.id))
-    .filter(
-      (snapshotFlight): snapshotFlight is Flight =>
-        snapshotFlight != null && getLiveFlightIdentityKey(snapshotFlight) === identityKey
-    )
-    .map(getValue);
-}
-
 function getDistanceFromHomeBaseMiles(flight: Flight, center: HomeBaseCenter) {
   return distanceBetweenPointsMiles({
     fromLatitude: center.latitude,
@@ -738,21 +393,6 @@ function getDistanceFromHomeBaseMiles(flight: Flight, center: HomeBaseCenter) {
     toLatitude: flight.latitude,
     toLongitude: flight.longitude
   });
-}
-
-function getLiveFlightIdentityKey(flight: Pick<Flight, "id" | "callsign">) {
-  return `${flight.id}|${flight.callsign.trim().toUpperCase()}`;
-}
-
-function getIdentityScopedValue<T>(
-  scopedValue: IdentityScopedValue<T> | undefined,
-  flight: Pick<Flight, "id" | "callsign">
-) {
-  if (!scopedValue) {
-    return null;
-  }
-
-  return scopedValue.identityKey === getLiveFlightIdentityKey(flight) ? scopedValue.value : null;
 }
 
 function getDistanceFromHomeBaseCoordinates(
@@ -1458,14 +1098,6 @@ function areSelectedFlightDetailsEquivalent(
   );
 }
 
-function getFlightPositionSnapshotKey(flight: Flight) {
-  return `${flight.latitude.toFixed(5)}:${flight.longitude.toFixed(5)}`;
-}
-
-function getFlightProviderTimestampSec(flight: Flight) {
-  return flight.positionTimestampSec ?? flight.lastContactTimestampSec ?? null;
-}
-
 // Why: closed-form evaluation of the critically-damped spring at frameTime.
 // Between target updates, the state's (from, target, targetSetAt) fully
 // determines the chase; computing pos(t) doesn't require per-frame state
@@ -1893,61 +1525,6 @@ function mergeFeedMetadataIntoFlight(flight: Flight, metadata: AeroApiFeedMetada
     flightNumber: metadata.flightNumber ?? flight.flightNumber,
     origin: metadata.origin ?? flight.origin
   };
-}
-
-function reconcileFlightOrder(currentOrder: string[], latestOrder: string[]) {
-  const latestIds = new Set(latestOrder);
-  const reconciled = currentOrder.filter((id) => latestIds.has(id));
-  const seenIds = new Set(reconciled);
-
-  for (const id of latestOrder) {
-    if (!seenIds.has(id)) {
-      reconciled.push(id);
-      seenIds.add(id);
-    }
-  }
-
-  return reconciled;
-}
-
-function arraysMatch(left: string[], right: string[]) {
-  return (
-    left.length === right.length && left.every((value, index) => value === right[index])
-  );
-}
-
-function pinSelectedFlightOrder(currentOrder: string[], targetOrder: string[], selectedFlightId: string | null) {
-  if (!selectedFlightId) {
-    return targetOrder;
-  }
-
-  const currentIndex = currentOrder.indexOf(selectedFlightId);
-  const targetIndex = targetOrder.indexOf(selectedFlightId);
-
-  if (currentIndex === -1 || targetIndex === -1) {
-    return targetOrder;
-  }
-
-  const nextOrder = targetOrder.filter((id) => id !== selectedFlightId);
-  nextOrder.splice(Math.min(currentIndex, nextOrder.length), 0, selectedFlightId);
-  return nextOrder;
-}
-
-function getRankChanges(previousOrder: string[], nextOrder: string[]) {
-  const nextIndexById = new Map(nextOrder.map((id, index) => [id, index]));
-  const changes: Record<string, number> = {};
-
-  for (const [previousIndex, id] of previousOrder.entries()) {
-    const nextIndex = nextIndexById.get(id);
-
-    if (nextIndex == null || nextIndex === previousIndex) {
-      continue;
-    }
-
-    changes[id] = previousIndex - nextIndex;
-  }
-
-  return changes;
 }
 
 export function FlightMap() {
