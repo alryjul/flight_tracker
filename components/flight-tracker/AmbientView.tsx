@@ -35,6 +35,7 @@ import {
   getOperatorLabel,
   getOperatorLabelTitle,
   getPrimaryIdentifier,
+  getStripRouteLabel,
   normalizeRegisteredOwnerLabel
 } from "@/lib/flights/display";
 import {
@@ -126,37 +127,19 @@ export function AmbientView({ flight, isSelected, homeBase }: AmbientViewProps) 
 
       {flight ? (
         <>
-          {/* Hero rows — three equal-width split-flap panels in a
-              horizontal grid. Each column gets the same width via
-              grid-cols-3; content inside is centered, so a 3-letter
-              airport code in a column shaped for 7-cell flight
-              numbers reads as "centered in its slot." */}
-          <div className="grid grid-cols-3 gap-2">
-            <HeroPanel
-              label="Flight"
-              value={getPrimaryIdentifier(flight).toUpperCase()}
-              cells={FLIGHT_CELL_LENGTH}
-              charSet="alphanumeric"
-            />
-            <HeroPanel
-              label="From"
-              value={isShortAirportCode(flight.origin) ? flight.origin : ""}
-              cells={AIRPORT_CELL_LENGTH}
-              fallback={!isShortAirportCode(flight.origin) ? flight.origin : null}
-              charSet="alphanumericExtra"
-            />
-            <HeroPanel
-              label="To"
-              value={
-                isShortAirportCode(flight.destination) ? flight.destination : ""
-              }
-              cells={AIRPORT_CELL_LENGTH}
-              fallback={
-                !isShortAirportCode(flight.destination) ? flight.destination : null
-              }
-              charSet="alphanumericExtra"
-            />
-          </div>
+          {/* Hero rows — adaptive grid mirroring SelectedFlightCard's
+              FlightRouteRow logic:
+                - origin AND destination → 3 panels (FLIGHT/FROM/TO)
+                - origin only            → 2 panels (FLIGHT/FROM)
+                - destination only       → 2 panels (FLIGHT/TO)
+                - neither                → 2 panels (FLIGHT/ROUTE)
+                                           where ROUTE is the fallback
+                                           string (VFR / Route pending)
+              Equal column widths via the grid; content inside each
+              panel centers. Hiding panels we don't have data for
+              keeps the board honest — empty TO slots would invite
+              "what's the destination" ambiguity. */}
+          <RouteGrid flight={flight} />
 
           <Separator className="bg-border/60" />
 
@@ -208,11 +191,114 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Why: one of the three hero panels (FLIGHT / FROM / TO). Renders a
-// label above a split-flap panel. Inside a grid-cols-3 parent, the
-// columns share equal width — content centers within. Cell counts
-// vary per column (7 for flight, 4 for airports) since airport codes
-// are inherently shorter; the surrounding panel sizes stay aligned
+// Why: adaptive grid for the FLIGHT panel + route panels. Same logic
+// as SelectedFlightCard's FlightRouteRow — which panels render
+// depends on what data is available. FLIGHT is always present;
+// FROM/TO/ROUTE adapt based on origin/destination availability.
+function RouteGrid({ flight }: { flight: Flight }) {
+  const origin = flight.origin;
+  const destination = flight.destination;
+  const flightValue = getPrimaryIdentifier(flight).toUpperCase();
+
+  // Both endpoints — three panels.
+  if (origin && destination) {
+    return (
+      <div className="grid grid-cols-3 gap-2">
+        <HeroPanel
+          label="Flight"
+          value={flightValue}
+          cells={FLIGHT_CELL_LENGTH}
+          charSet="alphanumeric"
+        />
+        <HeroPanel
+          label="From"
+          value={isShortAirportCode(origin) ? origin : ""}
+          cells={AIRPORT_CELL_LENGTH}
+          fallback={!isShortAirportCode(origin) ? origin : null}
+          charSet="alphanumericExtra"
+        />
+        <HeroPanel
+          label="To"
+          value={isShortAirportCode(destination) ? destination : ""}
+          cells={AIRPORT_CELL_LENGTH}
+          fallback={!isShortAirportCode(destination) ? destination : null}
+          charSet="alphanumericExtra"
+        />
+      </div>
+    );
+  }
+
+  // Origin only — two panels (FLIGHT / FROM).
+  if (origin) {
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <HeroPanel
+          label="Flight"
+          value={flightValue}
+          cells={FLIGHT_CELL_LENGTH}
+          charSet="alphanumeric"
+        />
+        <HeroPanel
+          label="From"
+          value={isShortAirportCode(origin) ? origin : ""}
+          cells={AIRPORT_CELL_LENGTH}
+          fallback={!isShortAirportCode(origin) ? origin : null}
+          charSet="alphanumericExtra"
+        />
+      </div>
+    );
+  }
+
+  // Destination only — two panels (FLIGHT / TO).
+  if (destination) {
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <HeroPanel
+          label="Flight"
+          value={flightValue}
+          cells={FLIGHT_CELL_LENGTH}
+          charSet="alphanumeric"
+        />
+        <HeroPanel
+          label="To"
+          value={isShortAirportCode(destination) ? destination : ""}
+          cells={AIRPORT_CELL_LENGTH}
+          fallback={!isShortAirportCode(destination) ? destination : null}
+          charSet="alphanumericExtra"
+        />
+      </div>
+    );
+  }
+
+  // Neither endpoint — show FLIGHT plus a fallback ROUTE panel
+  // (VFR for VFR-squawking flights, Route pending otherwise).
+  // Mirrors FlightRouteRow's no-route fallback.
+  const fallbackText = getStripRouteLabel(flight);
+  const fallbackFitsSplitFlap = fallbackText.length <= AIRPORT_CELL_LENGTH;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <HeroPanel
+        label="Flight"
+        value={flightValue}
+        cells={FLIGHT_CELL_LENGTH}
+        charSet="alphanumeric"
+      />
+      <HeroPanel
+        label="Route"
+        value={fallbackFitsSplitFlap ? fallbackText : ""}
+        cells={AIRPORT_CELL_LENGTH}
+        fallback={fallbackFitsSplitFlap ? null : fallbackText}
+        charSet="alphanumericExtra"
+      />
+    </div>
+  );
+}
+
+// Why: one of the hero panels (FLIGHT / FROM / TO / ROUTE). Renders a
+// label above a split-flap panel. Inside a grid parent, panel
+// widths are equal; content centers within. Cell counts vary per
+// column (7 for flight, 4 for airports) since airport codes are
+// inherently shorter; the surrounding panel sizes stay aligned
 // because the grid forces equal column widths.
 function HeroPanel({
   label,
