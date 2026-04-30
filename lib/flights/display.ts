@@ -338,27 +338,49 @@ export function looksLikeGeneralAviationFlight(flight: Flight) {
 }
 
 // Why: AeroAPI's status field defaults to "En Route" / "En Route / On
-// Time" for any airborne flight that's running normally — which is
-// obvious from the fact that the user is looking at a moving dot on
-// the map. Showing the badge in that case is pure noise. Filter the
-// "everything's fine, the plane is flying" states out so the badge
-// only renders when status carries actual signal: ground transitions
+// Time" for any airborne flight that's running normally — obvious from
+// the fact that the user is looking at a moving dot on the map.
+// Filter the "everything's fine, the plane is flying" states out so
+// the badge only renders for actual signal: ground transitions
 // (Taxiing, Landed, Arrived), schedule deviations (Delayed, Diverted,
 // Cancelled), or timeliness drift (the "Late N min" / "Early N min"
 // suffixes AeroAPI appends).
 //
-// "On Time" alone is treated the same as "En Route / On Time" — it
-// shows up occasionally as a bare value and is equally uninformative
-// for a flight the user is already watching.
-const BORING_FLIGHT_STATUSES = new Set([
-  "en route",
-  "en route / on time",
-  "on time"
-]);
+// Compound statuses ("En Route / Delayed", "Landed / On Time") get
+// normalized first: drop the "En Route /" prefix because it's
+// redundant (the plane is moving — we know), and drop the "/ On Time"
+// suffix because it's the airline's "everything's fine" verbiage.
+// What remains is the meaningful part. So:
+//   "En Route / Delayed"      → "Delayed"
+//   "En Route / Late 12 min"  → "Late 12 min"
+//   "Landed / On Time"        → "Landed"
+//   "Landed / Late 5 min"     → "Landed / Late 5 min" (kept — both
+//                                pieces are informative; the user
+//                                might not have noticed the landing)
+const BORING_FLIGHT_STATUSES = new Set(["en route", "on time"]);
+const STATUSES_WITH_REDUNDANT_PREFIX = new Set(["en route"]);
 
 export function getMeaningfulFlightStatus(status: string | null | undefined) {
   if (!status) return null;
-  const normalized = status.trim();
+  let normalized = status.trim();
+  if (normalized.length === 0) return null;
+
+  // Split compound "X / Y" statuses and drop the redundant half.
+  const slashIdx = normalized.indexOf("/");
+  if (slashIdx >= 0) {
+    const prefix = normalized.slice(0, slashIdx).trim();
+    const suffix = normalized.slice(slashIdx + 1).trim();
+    if (STATUSES_WITH_REDUNDANT_PREFIX.has(prefix.toLowerCase())) {
+      // "En Route / X" → drop the prefix; suffix carries the signal.
+      normalized = suffix;
+    } else if (suffix.toLowerCase() === "on time") {
+      // "X / On Time" → drop the redundant timeliness suffix.
+      normalized = prefix;
+    }
+    // else: keep the compound (e.g., "Landed / Late 5 min") since
+    // both pieces are informative and neither is redundant.
+  }
+
   if (normalized.length === 0) return null;
   if (BORING_FLIGHT_STATUSES.has(normalized.toLowerCase())) return null;
   return normalized;
