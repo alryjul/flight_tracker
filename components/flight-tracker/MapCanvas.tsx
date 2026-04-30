@@ -3,6 +3,7 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map as MapLibreMap } from "maplibre-gl";
+import { useTheme } from "next-themes";
 import { distanceBetweenPointsMiles } from "@/lib/geo";
 import type { Flight } from "@/lib/flights/types";
 import { refreshVfrLatchIfApplicable } from "@/lib/flights/display";
@@ -38,6 +39,299 @@ import {
   STRIP_HOVER_ECHO_DURATION_MS,
   STRIP_HOVER_ECHO_GROWTH
 } from "@/lib/config/flight-map-constants";
+
+type MapMode = "light" | "dark";
+
+const BASEMAP_URLS: Record<MapMode, string> = {
+  // CartoDB Positron + Dark Matter — same layer/source structure, just inverted
+  // tones, so map.setStyle() preserves the camera and we only re-add custom
+  // sources/layers.
+  light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+  dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+};
+
+type MapPalette = {
+  homeRingColor: string;
+  homeBaseFill: string;
+  homeBaseStroke: string;
+  flightCloseColor: string;
+  flightMidColor: string;
+  flightFarColor: string;
+  flightStroke: string;
+  selectedHaloFill: string;
+  selectedHaloStroke: string;
+  selectedMarkerStroke: string;
+  trackLineColor: string;
+  labelColor: string;
+  labelSelectedColor: string;
+  labelHaloColor: string;
+};
+
+const PALETTES: Record<MapMode, MapPalette> = {
+  light: {
+    homeRingColor: "rgba(38, 84, 124, 0.25)",
+    homeBaseFill: "#f4efe6",
+    homeBaseStroke: "#0f4c81",
+    flightCloseColor: "#0f4c81",
+    flightMidColor: "#3a6f98",
+    flightFarColor: "#7895ad",
+    flightStroke: "#f4efe6",
+    selectedHaloFill: "rgba(15, 76, 129, 0.12)",
+    selectedHaloStroke: "rgba(15, 76, 129, 0.38)",
+    selectedMarkerStroke: "#fff9f2",
+    trackLineColor: "rgba(15, 76, 129, 0.5)",
+    labelColor: "#17324d",
+    labelSelectedColor: "#9f4316",
+    labelHaloColor: "rgba(255,255,255,0.92)"
+  },
+  dark: {
+    // Why: bright sky-tinted blues against the near-black Dark Matter basemap.
+    // Stroke darkens (instead of cream) so dots stay legible without ringing.
+    homeRingColor: "rgba(125, 174, 230, 0.32)",
+    homeBaseFill: "#0f172a",
+    homeBaseStroke: "#7daee6",
+    flightCloseColor: "#bfdbfe",
+    flightMidColor: "#7daee6",
+    flightFarColor: "#5d8db8",
+    flightStroke: "#0a1422",
+    selectedHaloFill: "rgba(125, 174, 230, 0.18)",
+    selectedHaloStroke: "rgba(125, 174, 230, 0.55)",
+    selectedMarkerStroke: "#0a1422",
+    trackLineColor: "rgba(125, 174, 230, 0.62)",
+    labelColor: "#cbd5e1",
+    labelSelectedColor: "#fdba74",
+    labelHaloColor: "rgba(2,6,23,0.88)"
+  }
+};
+
+type SetupArgs = {
+  map: MapLibreMap;
+  palette: MapPalette;
+  homeBaseFeatures: ReturnType<typeof buildHomeBaseFeatures>;
+  hoveredFlightIdRef: React.MutableRefObject<string | null>;
+  onSelectFlight: (id: string) => void;
+  onHoverFlight: (state: HoveredFlightState | null) => void;
+};
+
+// Why: extracted so it can run on initial map load AND after a theme-driven
+// setStyle() — maplibre wipes custom sources/layers when the basemap style
+// is replaced, so we re-add them with the new palette.
+function setupCustomLayers({
+  map,
+  palette,
+  homeBaseFeatures,
+  hoveredFlightIdRef,
+  onSelectFlight,
+  onHoverFlight
+}: SetupArgs) {
+  map.addSource("home-base", {
+    type: "geojson",
+    data: homeBaseFeatures
+  });
+
+  map.addSource("flights", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] }
+  });
+
+  map.addSource("selected-track", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] }
+  });
+
+  map.addLayer({
+    id: "home-rings",
+    type: "line",
+    source: "home-base",
+    filter: ["==", ["geometry-type"], "LineString"],
+    paint: {
+      "line-color": palette.homeRingColor,
+      "line-width": ["match", ["get", "radiusMiles"], 3, 1.4, 8, 1.1, 1],
+      "line-dasharray": [2, 3]
+    }
+  });
+
+  map.addLayer({
+    id: "home-base-point",
+    type: "circle",
+    source: "home-base",
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: {
+      "circle-radius": 6,
+      "circle-color": palette.homeBaseFill,
+      "circle-stroke-color": palette.homeBaseStroke,
+      "circle-stroke-width": 3
+    }
+  });
+
+  map.addLayer({
+    id: "flight-points",
+    type: "circle",
+    source: "flights",
+    paint: {
+      "circle-radius": [
+        "case",
+        ["<=", ["get", "distanceMiles"], 3],
+        8,
+        ["<=", ["get", "distanceMiles"], 8],
+        6.5,
+        4.75
+      ],
+      "circle-color": [
+        "case",
+        ["<=", ["get", "distanceMiles"], 3],
+        palette.flightCloseColor,
+        ["<=", ["get", "distanceMiles"], 8],
+        palette.flightMidColor,
+        palette.flightFarColor
+      ],
+      "circle-opacity": [
+        "case",
+        ["<=", ["get", "distanceMiles"], 3],
+        0.95,
+        ["<=", ["get", "distanceMiles"], 8],
+        0.82,
+        0.62
+      ],
+      "circle-stroke-color": palette.flightStroke,
+      "circle-stroke-width": ["case", ["get", "isPriority"], 2.6, 1.8]
+    }
+  });
+
+  map.addLayer({
+    id: "selected-flight-halo",
+    type: "circle",
+    source: "flights",
+    filter: ["==", ["get", "isSelected"], true],
+    paint: {
+      "circle-radius": 18,
+      "circle-color": palette.selectedHaloFill,
+      "circle-stroke-color": palette.selectedHaloStroke,
+      "circle-stroke-width": 2.5
+    }
+  });
+
+  map.addLayer({
+    id: "hovered-flight-halo",
+    type: "circle",
+    source: "flights",
+    filter: ["==", ["get", "isHovered"], true],
+    paint: {
+      "circle-radius": 13,
+      "circle-color": "rgba(240, 127, 79, 0.1)",
+      "circle-stroke-color": "rgba(240, 127, 79, 0.46)",
+      "circle-stroke-width": 2
+    }
+  });
+
+  map.addLayer({
+    id: "strip-hover-echo",
+    type: "circle",
+    source: "flights",
+    filter: ["==", ["get", "isStripHovered"], true],
+    paint: {
+      "circle-radius": ["get", "stripHoverRadius"],
+      "circle-color": "rgba(240, 127, 79, 0.04)",
+      "circle-opacity": ["get", "stripHoverOpacity"],
+      "circle-stroke-color": "rgba(240, 127, 79, 0.92)",
+      "circle-stroke-opacity": ["get", "stripHoverStrokeOpacity"],
+      "circle-stroke-width": 2
+    }
+  });
+
+  map.addLayer({
+    id: "selected-flight-marker",
+    type: "circle",
+    source: "flights",
+    filter: ["==", ["get", "isSelected"], true],
+    paint: {
+      "circle-radius": 9.5,
+      "circle-color": "#f07f4f",
+      "circle-opacity": 1,
+      "circle-stroke-color": palette.selectedMarkerStroke,
+      "circle-stroke-width": 3
+    }
+  });
+
+  map.addLayer(
+    {
+      id: "selected-track-line",
+      type: "line",
+      source: "selected-track",
+      paint: {
+        "line-color": palette.trackLineColor,
+        "line-width": 2.5
+      }
+    },
+    "selected-flight-marker"
+  );
+
+  map.addLayer({
+    id: "flight-labels",
+    type: "symbol",
+    source: "flights",
+    layout: {
+      "text-field": ["case", ["get", "showLabel"], ["get", "label"], ""],
+      "text-size": [
+        "case",
+        ["get", "isSelected"],
+        12,
+        ["get", "isPriority"],
+        11,
+        10
+      ],
+      "text-font": ["Noto Sans Regular"],
+      "text-offset": [0, 1.4],
+      "text-anchor": "top",
+      "text-allow-overlap": false
+    },
+    paint: {
+      "text-color": [
+        "case",
+        ["get", "isSelected"],
+        palette.labelSelectedColor,
+        palette.labelColor
+      ],
+      "text-halo-color": palette.labelHaloColor,
+      "text-halo-width": ["case", ["get", "isSelected"], 1.8, 1.2]
+    }
+  });
+
+  map.on("click", "flight-points", (event) => {
+    const feature = event.features?.[0];
+    const id = feature?.properties?.id;
+
+    if (typeof id === "string") {
+      onSelectFlight(id);
+    }
+  });
+
+  map.on("mousemove", "flight-points", (event) => {
+    const feature = event.features?.[0];
+    const id = feature?.properties?.id;
+
+    if (typeof id !== "string") {
+      return;
+    }
+
+    hoveredFlightIdRef.current = id;
+    onHoverFlight({
+      flightId: id,
+      left: event.point.x,
+      top: event.point.y
+    });
+  });
+
+  map.on("mouseenter", "flight-points", () => {
+    map.getCanvas().style.cursor = "pointer";
+  });
+
+  map.on("mouseleave", "flight-points", () => {
+    map.getCanvas().style.cursor = "";
+    hoveredFlightIdRef.current = null;
+    onHoverFlight(null);
+  });
+}
 
 type MapCanvasProps = {
   homeBase: HomeBaseCenter;
@@ -93,6 +387,15 @@ export function MapCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const { resolvedTheme } = useTheme();
+  // Why: next-themes returns undefined until the theme is hydrated on the
+  // client; default to light so the initial render is stable. The
+  // theme-change effect below swaps the basemap once the real value lands.
+  const mapMode: MapMode = resolvedTheme === "dark" ? "dark" : "light";
+  // Mirror to a ref so the init useEffect (which only runs once) can read
+  // the latest mode without re-triggering itself on every theme change.
+  const mapModeRef = useRef<MapMode>(mapMode);
+  mapModeRef.current = mapMode;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -101,7 +404,7 @@ export function MapCanvas({
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+      style: BASEMAP_URLS[mapModeRef.current],
       bounds: openingBounds,
       fitBoundsOptions: {
         padding: 40
@@ -112,236 +415,15 @@ export function MapCanvas({
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
 
     map.on("load", () => {
+      setupCustomLayers({
+        map,
+        palette: PALETTES[mapModeRef.current],
+        homeBaseFeatures,
+        hoveredFlightIdRef,
+        onSelectFlight,
+        onHoverFlight
+      });
       setMapReady(true);
-
-      map.addSource("home-base", {
-        type: "geojson",
-        data: homeBaseFeatures
-      });
-
-      map.addSource("flights", {
-        type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: []
-        }
-      });
-
-      map.addSource("selected-track", {
-        type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: []
-        }
-      });
-
-      map.addLayer({
-        id: "home-rings",
-        type: "line",
-        source: "home-base",
-        filter: ["==", ["geometry-type"], "LineString"],
-        paint: {
-          "line-color": "rgba(38, 84, 124, 0.25)",
-          "line-width": [
-            "match",
-            ["get", "radiusMiles"],
-            3,
-            1.4,
-            8,
-            1.1,
-            1
-          ],
-          "line-dasharray": [2, 3]
-        }
-      });
-
-      map.addLayer({
-        id: "home-base-point",
-        type: "circle",
-        source: "home-base",
-        filter: ["==", ["geometry-type"], "Point"],
-        paint: {
-          "circle-radius": 6,
-          "circle-color": "#f4efe6",
-          "circle-stroke-color": "#0f4c81",
-          "circle-stroke-width": 3
-        }
-      });
-
-      map.addLayer({
-        id: "flight-points",
-        type: "circle",
-        source: "flights",
-        paint: {
-          "circle-radius": [
-            "case",
-            ["<=", ["get", "distanceMiles"], 3],
-            8,
-            ["<=", ["get", "distanceMiles"], 8],
-            6.5,
-            4.75
-          ],
-          "circle-color": [
-            "case",
-            ["<=", ["get", "distanceMiles"], 3],
-            "#0f4c81",
-            ["<=", ["get", "distanceMiles"], 8],
-            "#3a6f98",
-            "#7895ad"
-          ],
-          "circle-opacity": [
-            "case",
-            ["<=", ["get", "distanceMiles"], 3],
-            0.95,
-            ["<=", ["get", "distanceMiles"], 8],
-            0.82,
-            0.62
-          ],
-          "circle-stroke-color": "#f4efe6",
-          "circle-stroke-width": [
-            "case",
-            ["get", "isPriority"],
-            2.6,
-            1.8
-          ]
-        }
-      });
-
-      map.addLayer({
-        id: "selected-flight-halo",
-        type: "circle",
-        source: "flights",
-        filter: ["==", ["get", "isSelected"], true],
-        paint: {
-          "circle-radius": 18,
-          "circle-color": "rgba(15, 76, 129, 0.12)",
-          "circle-stroke-color": "rgba(15, 76, 129, 0.38)",
-          "circle-stroke-width": 2.5
-        }
-      });
-
-      map.addLayer({
-        id: "hovered-flight-halo",
-        type: "circle",
-        source: "flights",
-        filter: ["==", ["get", "isHovered"], true],
-        paint: {
-          "circle-radius": 13,
-          "circle-color": "rgba(240, 127, 79, 0.1)",
-          "circle-stroke-color": "rgba(240, 127, 79, 0.46)",
-          "circle-stroke-width": 2
-        }
-      });
-
-      map.addLayer({
-        id: "strip-hover-echo",
-        type: "circle",
-        source: "flights",
-        filter: ["==", ["get", "isStripHovered"], true],
-        paint: {
-          "circle-radius": ["get", "stripHoverRadius"],
-          "circle-color": "rgba(240, 127, 79, 0.04)",
-          "circle-opacity": ["get", "stripHoverOpacity"],
-          "circle-stroke-color": "rgba(240, 127, 79, 0.92)",
-          "circle-stroke-opacity": ["get", "stripHoverStrokeOpacity"],
-          "circle-stroke-width": 2
-        }
-      });
-
-      map.addLayer({
-        id: "selected-flight-marker",
-        type: "circle",
-        source: "flights",
-        filter: ["==", ["get", "isSelected"], true],
-        paint: {
-          "circle-radius": 9.5,
-          "circle-color": "#f07f4f",
-          "circle-opacity": 1,
-          "circle-stroke-color": "#fff9f2",
-          "circle-stroke-width": 3
-        }
-      });
-
-      map.addLayer({
-        id: "selected-track-line",
-        type: "line",
-        source: "selected-track",
-        paint: {
-          "line-color": "rgba(15, 76, 129, 0.5)",
-          "line-width": 2.5
-        }
-      }, "selected-flight-marker");
-
-      map.addLayer({
-        id: "flight-labels",
-        type: "symbol",
-        source: "flights",
-        layout: {
-          "text-field": ["case", ["get", "showLabel"], ["get", "label"], ""],
-          "text-size": [
-            "case",
-            ["get", "isSelected"],
-            12,
-            ["get", "isPriority"],
-            11,
-            10
-          ],
-          "text-font": ["Noto Sans Regular"],
-          "text-offset": [0, 1.4],
-          "text-anchor": "top",
-          "text-allow-overlap": false
-        },
-        paint: {
-          "text-color": [
-            "case",
-            ["get", "isSelected"],
-            "#9f4316",
-            "#17324d"
-          ],
-          "text-halo-color": "rgba(255,255,255,0.92)",
-          "text-halo-width": [
-            "case",
-            ["get", "isSelected"],
-            1.8,
-            1.2
-          ]
-        }
-      });
-
-      map.on("click", "flight-points", (event) => {
-        const feature = event.features?.[0];
-        const id = feature?.properties?.id;
-
-        if (typeof id === "string") {
-          onSelectFlight(id);
-        }
-      });
-
-      map.on("mousemove", "flight-points", (event) => {
-        const feature = event.features?.[0];
-        const id = feature?.properties?.id;
-
-        if (typeof id !== "string") {
-          return;
-        }
-
-        hoveredFlightIdRef.current = id;
-        onHoverFlight({
-          flightId: id,
-          left: event.point.x,
-          top: event.point.y
-        });
-      });
-
-      map.on("mouseenter", "flight-points", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-
-      map.on("mouseleave", "flight-points", () => {
-        map.getCanvas().style.cursor = "";
-        hoveredFlightIdRef.current = null;
-        onHoverFlight(null);
-      });
     });
 
     mapRef.current = map;
@@ -359,6 +441,35 @@ export function MapCanvas({
     // current values, and they don't change after first render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [homeBaseFeatures, openingBounds]);
+
+  // Why: when the user toggles the theme, swap the basemap and re-add our
+  // custom sources/layers. setStyle() preserves the camera but wipes any
+  // sources/layers we added, so we redo them with the new palette inside
+  // the next style.load tick. The next RAF frame repopulates the flights
+  // and selected-track sources from refs.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const map = mapRef.current;
+    map.setStyle(BASEMAP_URLS[mapMode]);
+    const handleStyleLoad = () => {
+      setupCustomLayers({
+        map,
+        palette: PALETTES[mapMode],
+        homeBaseFeatures,
+        hoveredFlightIdRef,
+        onSelectFlight,
+        onHoverFlight
+      });
+    };
+    map.once("style.load", handleStyleLoad);
+    return () => {
+      map.off("style.load", handleStyleLoad);
+    };
+    // Why: refs and stable React setters are intentionally excluded — the
+    // setupCustomLayers closure captures their current values. mapRef is a
+    // stable ref object owned by the orchestrator.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapMode, mapReady]);
 
   useEffect(() => {
     const homeBaseSource = mapRef.current?.getSource("home-base") as GeoJSONSource | undefined;
