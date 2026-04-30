@@ -62,6 +62,23 @@ const VALUE_LEADING = "leading-tight";
 const FLIGHT_CELL_LENGTH = 7;
 const AIRPORT_CELL_LENGTH = 4;
 
+// Why: panel font size depends on layout context. When all three
+// panels render (FLIGHT/FROM/TO), short airport codes never fall
+// back to text — they always render as split-flap, so we can use
+// the bigger "lg" size for visual presence. When only one route
+// panel renders (origin-only / destination-only / fallback), it
+// might contain a long readable name (LAPD Hooper Heliport,
+// Cedars-Sinai Medical Center) that falls back to truncated text;
+// "base" leaves more characters visible before truncation.
+type HeroPanelSize = "lg" | "base";
+const SIZE_CLASSES: Record<
+  HeroPanelSize,
+  { display: string; fallback: string; height: string }
+> = {
+  lg: { display: "text-lg", fallback: "text-sm", height: "h-11" },
+  base: { display: "text-base", fallback: "text-xs", height: "h-10" }
+};
+
 type AmbientViewProps = {
   flight: Flight | null;
   isSelected: boolean;
@@ -173,26 +190,26 @@ function RouteGrid({ flight }: { flight: Flight }) {
   const destination = flight.destination;
   const flightValue = getPrimaryIdentifier(flight).toUpperCase();
 
-  const flightPanel = (
-    <HeroPanel
-      label="Flight"
-      value={flightValue}
-      cells={FLIGHT_CELL_LENGTH}
-      charSet="alphanumeric"
-    />
-  );
-
-  // Both endpoints — FLIGHT (1/2) + FROM (1/4) + TO (1/4).
+  // Both endpoints — FLIGHT (1/2) + FROM (1/4) + TO (1/4), all "lg"
+  // since short airport codes always render as split-flap and the
+  // flight panel still has room.
   if (origin && destination) {
     return (
       <div className="grid grid-cols-[2fr_1fr_1fr] gap-2">
-        {flightPanel}
+        <HeroPanel
+          label="Flight"
+          value={flightValue}
+          cells={FLIGHT_CELL_LENGTH}
+          charSet="alphanumeric"
+          size="lg"
+        />
         <HeroPanel
           label="From"
           value={isShortAirportCode(origin) ? origin : ""}
           cells={AIRPORT_CELL_LENGTH}
           fallback={!isShortAirportCode(origin) ? origin : null}
           charSet="alphanumericExtra"
+          size="lg"
         />
         <HeroPanel
           label="To"
@@ -200,22 +217,38 @@ function RouteGrid({ flight }: { flight: Flight }) {
           cells={AIRPORT_CELL_LENGTH}
           fallback={!isShortAirportCode(destination) ? destination : null}
           charSet="alphanumericExtra"
+          size="lg"
         />
       </div>
     );
   }
 
+  // Two-panel layouts (origin-only / destination-only / fallback).
+  // Route side may contain a long readable name (LAPD Hooper
+  // Heliport) that falls back to text — "base" size leaves more
+  // characters visible before truncation.
+  const flightPanelBase = (
+    <HeroPanel
+      label="Flight"
+      value={flightValue}
+      cells={FLIGHT_CELL_LENGTH}
+      charSet="alphanumeric"
+      size="base"
+    />
+  );
+
   // Origin only — FLIGHT (1/2) + FROM (1/2).
   if (origin) {
     return (
       <div className="grid grid-cols-2 gap-2">
-        {flightPanel}
+        {flightPanelBase}
         <HeroPanel
           label="From"
           value={isShortAirportCode(origin) ? origin : ""}
           cells={AIRPORT_CELL_LENGTH}
           fallback={!isShortAirportCode(origin) ? origin : null}
           charSet="alphanumericExtra"
+          size="base"
         />
       </div>
     );
@@ -225,13 +258,14 @@ function RouteGrid({ flight }: { flight: Flight }) {
   if (destination) {
     return (
       <div className="grid grid-cols-2 gap-2">
-        {flightPanel}
+        {flightPanelBase}
         <HeroPanel
           label="To"
           value={isShortAirportCode(destination) ? destination : ""}
           cells={AIRPORT_CELL_LENGTH}
           fallback={!isShortAirportCode(destination) ? destination : null}
           charSet="alphanumericExtra"
+          size="base"
         />
       </div>
     );
@@ -243,13 +277,14 @@ function RouteGrid({ flight }: { flight: Flight }) {
   const fallbackFitsSplitFlap = fallbackText.length <= AIRPORT_CELL_LENGTH;
   return (
     <div className="grid grid-cols-2 gap-2">
-      {flightPanel}
+      {flightPanelBase}
       <HeroPanel
         label="Route"
         value={fallbackFitsSplitFlap ? fallbackText : ""}
         cells={AIRPORT_CELL_LENGTH}
         fallback={fallbackFitsSplitFlap ? null : fallbackText}
         charSet="alphanumericExtra"
+        size="base"
       />
     </div>
   );
@@ -266,32 +301,41 @@ function HeroPanel({
   value,
   cells,
   charSet,
-  fallback
+  fallback,
+  size
 }: {
   label: string;
   value: string;
   cells: number;
   charSet: "alphanumeric" | "alphanumericExtra" | "alpha" | "numeric";
   fallback?: string | null;
+  size: HeroPanelSize;
 }) {
+  const sizeClasses = SIZE_CLASSES[size];
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <p className={LABEL_CLASS}>{label}</p>
-      <div className="flex h-10 items-center justify-start overflow-hidden rounded-md bg-background px-1.5 text-foreground shadow-inner ring-1 ring-border/30">
+      <div
+        className={cn(
+          "flex items-center justify-start overflow-hidden rounded-md bg-background px-1.5 text-foreground shadow-inner ring-1 ring-border/30",
+          sizeClasses.height
+        )}
+      >
         {fallback ? (
           // Why: long readable names (LAPD Hooper Heliport, Cedars-
           // Sinai Medical Center) don't fit in a 4-cell split-flap —
-          // fall back to plain text in the same panel slot. The
-          // fixed h-10 keeps panel heights aligned across the row.
-          <p className="truncate text-xs font-semibold leading-tight tracking-wider">
+          // fall back to plain text in the same panel slot. Fallback
+          // size is one tier smaller than the split-flap so more
+          // characters fit before truncation.
+          <p
+            className={cn(
+              "truncate font-semibold leading-tight tracking-wider",
+              sizeClasses.fallback
+            )}
+          >
             {fallback}
           </p>
         ) : (
-          // Why: text-base scales the split-flap cells down to ~10px
-          // character width, fitting a 7-cell flight number panel
-          // (FLIGHT/FROM/TO grid) inside the 20em-wide card with
-          // breathing room. text-xl was too wide and pushed cells
-          // off the edge.
           <SplitFlapDisplay
             value={value}
             charSet={charSet}
@@ -299,7 +343,7 @@ function HeroPanel({
             padDirection="end"
             cycleMs={45}
             flipMs={300}
-            className="text-base font-semibold tracking-wider"
+            className={cn("font-semibold tracking-wider", sizeClasses.display)}
           />
         )}
       </div>
