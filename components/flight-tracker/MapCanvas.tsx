@@ -42,6 +42,25 @@ import {
 
 type MapMode = "light" | "dark";
 
+// Why: avoid a cold-start double-style-load for dark-mode users. The
+// next-themes hook returns undefined on first render; if we default to
+// "light" the map paints Positron, then hydration completes, mapMode
+// flips to "dark", and setStyle wipes our custom layers and reloads
+// the basemap as Dark Matter — the user sees an obvious flash and
+// animation doesn't smooth out for several seconds. Read the user's
+// saved theme (or the OS preference) synchronously so the *first*
+// render already has the right mode.
+function detectInitialMapMode(): MapMode {
+  if (typeof window === "undefined") return "light";
+  // next-themes stores its current selection here; default key is "theme"
+  // (matches our ThemeProvider config in app/layout.tsx).
+  const saved = window.localStorage.getItem("theme");
+  if (saved === "dark") return "dark";
+  if (saved === "light") return "light";
+  // "system" or unset → consult the OS preference.
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 const BASEMAP_URLS: Record<MapMode, string> = {
   // CartoDB Positron + Dark Matter — same layer/source structure, just inverted
   // tones, so map.setStyle() preserves the camera and we only re-add custom
@@ -388,10 +407,20 @@ export function MapCanvas({
   const animationFrameRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const { resolvedTheme } = useTheme();
-  // Why: next-themes returns undefined until the theme is hydrated on the
-  // client; default to light so the initial render is stable. The
-  // theme-change effect below swaps the basemap once the real value lands.
-  const mapMode: MapMode = resolvedTheme === "dark" ? "dark" : "light";
+  // Why: next-themes returns undefined on first render (theme isn't resolved
+  // until after hydration). If we just default to "light" here, dark-mode
+  // users get a visible double-style-load on every cold start: map paints
+  // Positron, hydration finishes, mapMode flips to "dark", setStyle wipes
+  // the sources we just added, then Dark Matter paints. Several seconds
+  // wasted before animation looks smooth. Read the system preference +
+  // any saved next-themes choice synchronously from the document so the
+  // very first render already knows the right mode.
+  const mapMode: MapMode =
+    resolvedTheme === "dark"
+      ? "dark"
+      : resolvedTheme === "light"
+        ? "light"
+        : detectInitialMapMode();
   // Mirror to a ref so the init useEffect (which only runs once) can read
   // the latest mode without re-triggering itself on every theme change.
   const mapModeRef = useRef<MapMode>(mapMode);
