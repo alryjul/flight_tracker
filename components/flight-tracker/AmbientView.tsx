@@ -230,16 +230,18 @@ function RouteGrid({ flight }: { flight: Flight }) {
   }
 
   // Two-panel layouts (origin-only / destination-only / fallback).
-  // Route side may contain a long readable name (LAPD Hooper
-  // Heliport) that falls back to text — "base" size leaves more
-  // characters visible before truncation.
-  const flightPanelBase = (
+  // FLIGHT stays at "lg" — it always renders as a split-flap with
+  // bounded cell count, never falls back to long text. The route
+  // side stays at "base" because it might carry a long readable
+  // name (LAPD Hooper Heliport) that falls back to truncated text;
+  // smaller font there fits more characters before truncation.
+  const flightPanelLg = (
     <HeroPanel
       label="Flight"
       value={flightValue}
       cells={FLIGHT_CELL_LENGTH}
       charSet="alphanumeric"
-      size="base"
+      size="lg"
     />
   );
 
@@ -247,7 +249,7 @@ function RouteGrid({ flight }: { flight: Flight }) {
   if (origin) {
     return (
       <div className="grid grid-cols-2 gap-2">
-        {flightPanelBase}
+        {flightPanelLg}
         <HeroPanel
           label="From"
           value={isShortAirportCode(origin) ? origin : ""}
@@ -264,7 +266,7 @@ function RouteGrid({ flight }: { flight: Flight }) {
   if (destination) {
     return (
       <div className="grid grid-cols-2 gap-2">
-        {flightPanelBase}
+        {flightPanelLg}
         <HeroPanel
           label="To"
           value={isShortAirportCode(destination) ? destination : ""}
@@ -283,7 +285,7 @@ function RouteGrid({ flight }: { flight: Flight }) {
   const fallbackFitsSplitFlap = fallbackText.length <= AIRPORT_CELL_LENGTH;
   return (
     <div className="grid grid-cols-2 gap-2">
-      {flightPanelBase}
+      {flightPanelLg}
       <HeroPanel
         label="Route"
         value={fallbackFitsSplitFlap ? fallbackText : ""}
