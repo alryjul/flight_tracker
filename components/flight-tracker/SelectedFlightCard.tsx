@@ -19,6 +19,7 @@ import {
 import {
   formatAirspeed,
   formatAltitude,
+  getFlightStatusSeverity,
   getIdentifierLabel,
   getMeaningfulFlightStatus,
   getOperatorLabel,
@@ -26,8 +27,10 @@ import {
   getPrimaryIdentifier,
   getRadiotelephonyCall,
   getStripRouteLabel,
-  normalizeRegisteredOwnerLabel
+  normalizeRegisteredOwnerLabel,
+  type FlightStatusSeverity
 } from "@/lib/flights/display";
+import type { ComponentProps } from "react";
 import type { Flight } from "@/lib/flights/types";
 import {
   formatDistanceMiles,
@@ -55,6 +58,27 @@ type SelectedFlightCardProps = {
 // inflate the visible gap to the value below.
 const LABEL_CLASS =
   "text-[10px] leading-tight uppercase tracking-wider text-muted-foreground";
+
+// Why: severity-to-visual mapping for the status badge. Lives at the
+// component layer (not display.ts) because it's a styling concern; the
+// classification rules in display.ts return a severity string and the
+// component owns how that severity renders. shadcn's Badge has no
+// "warning" variant by default, so the warning row uses outline +
+// inline amber tints (works in both light + dark, mirrors the
+// destructive variant's "tinted bg + colored text" pattern).
+const STATUS_BADGE_STYLES: Record<
+  FlightStatusSeverity,
+  { variant: ComponentProps<typeof Badge>["variant"]; className?: string }
+> = {
+  critical: { variant: "destructive" },
+  warning: {
+    variant: "outline",
+    className:
+      "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+  },
+  ground: { variant: "secondary" },
+  info: { variant: "default" }
+};
 
 // Why: same story for values — each value across the card pins
 // leading-tight so the line-box height stays tight to the glyphs
@@ -140,7 +164,13 @@ function SelectedFlightCardImpl({
   // Why: the status badge hides the "everything's fine" airborne states
   // (En Route / On Time) and only renders for signal-bearing values —
   // ground transitions, deviations, timeliness drift. See display.ts.
+  // When it does render, the badge variant + tint reflect the severity
+  // of the state (critical / warning / ground / info) so the user can
+  // tell at a glance whether the status is concerning or just neutral.
   const meaningfulStatus = getMeaningfulFlightStatus(details?.status);
+  const statusBadgeStyle = meaningfulStatus
+    ? STATUS_BADGE_STYLES[getFlightStatusSeverity(meaningfulStatus)]
+    : null;
 
   return (
     <Card className="mx-1 mt-2 mb-2 shrink-0 gap-3 py-3">
@@ -163,8 +193,13 @@ function SelectedFlightCardImpl({
             <Badge variant="secondary" className="text-[10px]">
               {flight.aircraftType ?? "Unknown type"}
             </Badge>
-            {meaningfulStatus ? (
-              <Badge className="text-[10px]">{meaningfulStatus}</Badge>
+            {meaningfulStatus && statusBadgeStyle ? (
+              <Badge
+                variant={statusBadgeStyle.variant}
+                className={cn("text-[10px]", statusBadgeStyle.className)}
+              >
+                {meaningfulStatus}
+              </Badge>
             ) : null}
           </div>
         </div>

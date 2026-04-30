@@ -364,6 +364,55 @@ export function getMeaningfulFlightStatus(status: string | null | undefined) {
   return normalized;
 }
 
+// Why: classify the meaningful status strings into severity buckets so
+// the card badge can color-code them. Component maps each severity to
+// a Badge variant + optional className. Keeping the categorization
+// here (rather than in the component) means the rules live next to
+// the boring-status filter and the data shape — and a future strip-row
+// or list-item that wants to color-code status uses the same source
+// of truth.
+//
+// Categories:
+//   - "critical": something went wrong with the schedule (Cancelled,
+//     Diverted) — destructive variant, red
+//   - "warning": notable timeliness or routing issue (Delayed, Late N
+//     min, Holding) — amber-tinted outline
+//   - "ground": neutral ground transitions (Taxiing, Landed, Arrived,
+//     On Ground) — secondary variant, muted
+//   - "info": pre-flight or other not-yet-categorized states
+//     (Scheduled, Filed, Pre-Flight, "Early N min") — default primary
+export type FlightStatusSeverity = "critical" | "warning" | "ground" | "info";
+
+export function getFlightStatusSeverity(status: string): FlightStatusSeverity {
+  const lower = status.toLowerCase();
+  // Critical first — Cancelled / Diverted are always significant.
+  if (lower.includes("cancel") || lower.includes("divert")) {
+    return "critical";
+  }
+  // Ground next — once a flight has landed, any lateness is historical
+  // and shouldn't override the "this flight is on the ground" signal.
+  // ("Landed / Late 5 min" should read as ground, not warning.)
+  if (
+    lower.includes("taxi") ||
+    lower.includes("landed") ||
+    lower.includes("arriv") ||
+    lower.includes("on ground")
+  ) {
+    return "ground";
+  }
+  // Then the in-progress warnings: schedule slip or holding pattern
+  // for an airborne flight.
+  if (
+    lower.includes("delay") ||
+    // Match "Late" / "Late 12 min" / "/ Late" — but not "Early".
+    /\blate\b/.test(lower) ||
+    lower.includes("hold")
+  ) {
+    return "warning";
+  }
+  return "info";
+}
+
 export function getGroundStatusLabel(status: string | null | undefined) {
   const normalizedStatus = status?.trim().toLowerCase() ?? "";
 
