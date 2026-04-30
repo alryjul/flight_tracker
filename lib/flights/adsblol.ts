@@ -492,9 +492,9 @@ type AdsbLolAreaResponse = {
   total?: number;
 };
 
-function normalizeCallsign(value: string | null | undefined) {
+function normalizeCallsign(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : "Unknown";
+  return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 function adsbLolAircraftToFlight(
@@ -508,6 +508,18 @@ function adsbLolAircraftToFlight(
     !Number.isFinite(aircraft.lat) ||
     !Number.isFinite(aircraft.lon)
   ) {
+    return null;
+  }
+
+  // Why: drop unidentifiable aircraft at ingestion. adsb.lol occasionally
+  // returns ADS-B contacts with neither a transmitted callsign nor a
+  // looked-up registration — just a hex code and a position. Those show
+  // up in the strip as "Unknown" with empty everything (no airline,
+  // route, type, owner) and serve no purpose. We need at least one human
+  // identifier to display.
+  const callsignTransmitted = normalizeCallsign(aircraft.flight);
+  const registration = aircraft.r?.trim() || null;
+  if (!callsignTransmitted && !registration) {
     return null;
   }
 
@@ -528,7 +540,11 @@ function adsbLolAircraftToFlight(
       ? Math.round((responseNowMs - aircraft.seen * 1000) / 1000)
       : positionTimestampSec;
 
-  const callsign = normalizeCallsign(aircraft.flight);
+  // Why: prefer the transmitted callsign for display; fall back to the
+  // registration when the transponder hasn't broadcast a callsign yet
+  // (newly powered-on aircraft, or aircraft squawking only mode-S).
+  // Reads as "N433AK" instead of "Unknown" in the strip primary line.
+  const callsign = (callsignTransmitted ?? registration) as string;
   return {
     id: aircraft.hex.trim().toLowerCase(),
     latitude: aircraft.lat,
@@ -536,11 +552,13 @@ function adsbLolAircraftToFlight(
     callsign,
     onGround: onGround ? true : altitudeFeet == null ? null : false,
     flightNumber: null,
-    // Why: derive a readable airline name from the callsign prefix (SWA1234 → Southwest)
-    // immediately so the strip shows real text on the very first poll, before
-    // any ADSBdb/AeroAPI enrichment lands. Returns null for N-numbers and
-    // unrecognized prefixes; downstream enrichment overwrites if it has better data.
-    airline: deriveAirlineNameFromCallsign(callsign),
+    // Why: derive a readable airline name from the transmitted callsign
+    // (SWA1234 → Southwest) immediately so the strip shows real text on
+    // the very first poll, before any ADSBdb/AeroAPI enrichment lands.
+    // Pass the actual callsign rather than the registration fallback —
+    // a registration like "N433AK" wouldn't match an airline prefix
+    // anyway, but being explicit keeps the intent clear.
+    airline: deriveAirlineNameFromCallsign(callsignTransmitted),
     aircraftType: aircraft.t?.trim() || null,
     origin: null,
     destination: null,
@@ -557,7 +575,7 @@ function adsbLolAircraftToFlight(
           : null,
     positionTimestampSec,
     lastContactTimestampSec,
-    registration: aircraft.r?.trim() || null,
+    registration,
     // Why: `ownOp` from adsb.lol is the registered operator (e.g.,
     // "LAPD AIR SUPPORT DIVISION") — equivalent to ADSBdb's
     // registered_owner. Use it directly to skip an ADSBdb hit.

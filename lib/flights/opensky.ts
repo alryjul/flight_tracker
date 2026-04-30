@@ -60,8 +60,9 @@ function getBounds(area: FlightArea) {
   return { lamin, lamax, lomin, lomax };
 }
 
-function normalizeCallsign(callsign: string | null) {
-  return callsign?.trim() || "Unknown";
+function normalizeCallsign(callsign: string | null): string | null {
+  const trimmed = callsign?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 
@@ -118,10 +119,18 @@ export async function fetchOpenSkyFlights(
           ? squawkRaw.trim()
           : null;
 
+      // Why: OpenSky's state vector carries no registration field —
+      // callsign (state[1]) is the only display identifier we have.
+      // When it's empty we'd previously coerce to "Unknown" and emit a
+      // ghost-dot flight with no useful info. Drop it instead so the
+      // strip doesn't fill up with placeholder rows.
+      const normalizedCallsign = normalizeCallsign(callsign);
+
       if (
         icao24 == null ||
         longitude == null ||
         latitude == null ||
+        normalizedCallsign == null ||
         !isWithinBoundingBox({
           latitude,
           longitude,
@@ -137,7 +146,7 @@ export async function fetchOpenSkyFlights(
         id: icao24,
         latitude,
         longitude,
-        callsign: normalizeCallsign(callsign),
+        callsign: normalizedCallsign,
         onGround,
         flightNumber: null,
         airline: deriveAirlineFromCallsign(callsign),

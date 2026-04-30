@@ -406,10 +406,13 @@ async function fetchCombinedMetadata(icao24: string, callsign: string) {
 }
 
 export function enrichFlightsWithAdsbdbFallback(flights: Flight[]) {
+  // Why: discovery providers (adsblol, opensky) now drop flights without
+  // a usable identifier at the mapping step, so flight.callsign reaching
+  // here is always a real callsign or registration — no "Unknown"
+  // placeholder to guard against.
   const combinedToWarm = flights
     .filter(
       (flight) =>
-        flight.callsign !== "Unknown" &&
         (
           flight.aircraftType == null ||
           flight.registration == null ||
@@ -442,7 +445,6 @@ export function enrichFlightsWithAdsbdbFallback(flights: Flight[]) {
   const routeToWarm = flights
     .filter(
       (flight) =>
-        flight.callsign !== "Unknown" &&
         !looksLikeCommercialFlight(flight) &&
         (flight.airline == null ||
           flight.flightNumber == null ||
@@ -485,20 +487,15 @@ export function enrichFlightsWithAdsbdbFallback(flights: Flight[]) {
   return flights.map((flight) => {
     const normalizedCallsign = normalizeLookupCallsign(flight.callsign);
     const combinedMetadata =
-      flight.callsign === "Unknown"
-        ? null
-        : (getCachedValue(combinedCache, getCombinedCacheKey(flight.id, flight.callsign)) ?? null);
+      getCachedValue(combinedCache, getCombinedCacheKey(flight.id, flight.callsign)) ?? null;
     const aircraftMetadata =
       combinedMetadata?.aircraftMetadata ?? getCachedValue(aircraftCache, flight.id) ?? null;
-    const routeMetadata =
-      flight.callsign === "Unknown"
-        ? null
-        : looksLikeCommercialFlight(flight)
-          ? null
-          : (combinedMetadata?.routeMetadata ??
-              (normalizedCallsign == null
-                ? null
-                : getCachedValue(routeCache, normalizedCallsign) ?? null));
+    const routeMetadata = looksLikeCommercialFlight(flight)
+      ? null
+      : (combinedMetadata?.routeMetadata ??
+          (normalizedCallsign == null
+            ? null
+            : getCachedValue(routeCache, normalizedCallsign) ?? null));
 
     return {
       ...flight,

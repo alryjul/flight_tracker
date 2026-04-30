@@ -83,8 +83,13 @@ function normalizeAirportCode(input: {
   return input.code_iata || input.code_icao || input.code || null;
 }
 
-function getCallsign(input: AeroApiDiscoveryFlight) {
-  return input.ident_icao || input.ident || input.registration || "Unknown";
+function getCallsign(input: AeroApiDiscoveryFlight): string | null {
+  const candidates = [input.ident_icao, input.ident, input.registration];
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed && trimmed.length > 0) return trimmed;
+  }
+  return null;
 }
 
 function getFlightId(input: AeroApiDiscoveryFlight) {
@@ -116,11 +121,20 @@ function normalizeFlight(input: AeroApiDiscoveryFlight): Flight | null {
     return null;
   }
 
+  // Why: drop unidentifiable contacts. AeroAPI's discovery search
+  // occasionally returns rows with all of ident_icao / ident /
+  // registration null — typically stale tracks or partial data. They'd
+  // emit "Unknown" with no airline / route / type, just a position dot.
+  const callsign = getCallsign(input);
+  if (callsign == null) {
+    return null;
+  }
+
   return {
     id: getFlightId(input),
     latitude,
     longitude,
-    callsign: getCallsign(input),
+    callsign,
     onGround: null,
     flightNumber: input.ident_iata ?? null,
     // Why: AeroAPI returns operator codes; resolve to readable names so
