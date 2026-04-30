@@ -19,8 +19,9 @@
 // within them, so a 3-cell airport code in the same panel as a 7-cell
 // flight number both look "in their slot" rather than left-aligned.
 
-import { Helicopter, Plane } from "lucide-react";
+import { Helicopter, Plane, Tv } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SplitFlapDisplay } from "@/components/ui/split-flap";
 import {
@@ -91,6 +92,7 @@ type AmbientViewProps = {
   homeBase: HomeBaseCenter;
   altitudeTrend: TrendDirection;
   airspeedTrend: TrendDirection;
+  onExitAmbient: () => void;
 };
 
 export function AmbientView({
@@ -98,7 +100,8 @@ export function AmbientView({
   isSelected,
   homeBase,
   altitudeTrend,
-  airspeedTrend
+  airspeedTrend,
+  onExitAmbient
 }: AmbientViewProps) {
   const distanceMiles = flight
     ? getDistanceFromHomeBaseMiles(flight, homeBase)
@@ -118,9 +121,24 @@ export function AmbientView({
             {isSelected ? "Selected" : "Nearest"}
           </p>
         </div>
-        {flight ? (
-          <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
-        ) : null}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {flight ? (
+            <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
+          ) : null}
+          {/* Why: ambient toggle — pressed state since the user is
+              currently IN ambient view. Click switches back to
+              sidebar view. Same icon (Tv) as the toggle in the
+              SidebarHeader for a consistent affordance. */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Exit ambient view"
+            aria-pressed={true}
+            onClick={onExitAmbient}
+          >
+            <Tv className="size-4" aria-hidden="true" />
+          </Button>
+        </div>
       </div>
 
       {flight ? (

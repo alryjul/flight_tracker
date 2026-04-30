@@ -1402,7 +1402,18 @@ export function FlightMap() {
                 in view
               </span>
             </h2>
-            <ThemeToggle />
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Show ambient view"
+                aria-pressed={ambientMode}
+                onClick={() => setAmbientMode(true)}
+              >
+                <Tv className="size-4" aria-hidden="true" />
+              </Button>
+              <ThemeToggle />
+            </div>
           </div>
           {nearestFlight ? (
             <button
@@ -1458,27 +1469,19 @@ export function FlightMap() {
           homeBase={homeBase}
           altitudeTrend={ambientAltitudeTrend}
           airspeedTrend={ambientAirspeedTrend}
+          onExitAmbient={() => setAmbientMode(false)}
         />
       ) : null}
 
-      {/* Why: floating map toolbar — one container holds the ambient
-          toggle, layer-toggle button, and area-config button so they
-          read as a related set of "what the map shows" controls.
-          MapLibre's zoom buttons sit separately to the right at the
-          viewport corner. right-12 anchors the toolbar's right edge
-          48px from the viewport right, clearing the ~30px-wide
-          zoom-control stack at right:10. */}
+      {/* Why: floating map toolbar — layer-toggle + area-config
+          buttons. MapLibre's zoom buttons sit separately to the
+          right at the viewport corner. right-12 anchors the
+          toolbar's right edge 48px from the viewport right,
+          clearing the ~30px-wide zoom-control stack at right:10.
+          The ambient-mode toggle lives in the card headers (sidebar
+          + ambient view) instead of here so it's accessible from
+          either context. */}
       <div className="fixed right-12 bottom-2.5 z-20 flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-9 gap-1.5 bg-card px-2.5 shadow-md"
-          aria-label={ambientMode ? "Exit ambient view" : "Show ambient view"}
-          aria-pressed={ambientMode}
-          onClick={() => setAmbientMode((prev) => !prev)}
-        >
-          <Tv className="size-4" aria-hidden="true" />
-        </Button>
         <MapLayersPopover
           visibility={mapLabelVisibility}
           onVisibilityChange={setMapLabelVisibility}
