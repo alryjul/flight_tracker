@@ -4,6 +4,7 @@ import { Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 
 // Why: toggle visibility for both basemap label categories AND our
@@ -22,16 +23,31 @@ export type MapLabelVisibility = {
   placeLabels: boolean;
   roadLabels: boolean;
   poiLabels: boolean;
-  homeBaseIndicator: boolean;
+  // Why: split the old "home base" toggle into its two separable
+  // affordances — the centerpoint icon and the proximity rings — so
+  // users can keep one without the other (e.g., hide the rings to
+  // see the underlying map but keep the icon as a "you are here"
+  // anchor).
+  homeBaseIcon: boolean;
+  homeBaseRings: boolean;
   flightTrail: boolean;
+  // Why: scalar (0–1) multiplier applied to road / highway line
+  // opacity in dark mode only. Dark Matter's road styling competes
+  // with our flight icons; the slider lets the user dial it down to
+  // taste. 1 = no dim (basemap default), 0 = roads invisible.
+  // Light mode (Positron) ignores this — its roads are already
+  // low-contrast on the cream background.
+  roadDimDark: number;
 };
 
 export const DEFAULT_MAP_LABEL_VISIBILITY: MapLabelVisibility = {
   placeLabels: true,
   roadLabels: true,
   poiLabels: true,
-  homeBaseIndicator: true,
-  flightTrail: true
+  homeBaseIcon: true,
+  homeBaseRings: true,
+  flightTrail: true,
+  roadDimDark: 0.5
 };
 
 type MapLayersPopoverProps = {
@@ -39,10 +55,18 @@ type MapLayersPopoverProps = {
   onVisibilityChange: (next: MapLabelVisibility) => void;
 };
 
+// Why: only boolean-valued keys can be wired to Switch toggles. The
+// roadDimDark slider gets its own bespoke control below — keep the
+// generic toggle config strictly typed to avoid passing a number into
+// a Switch's `checked` prop by accident.
+type BooleanKeys<T> = {
+  [K in keyof T]: T[K] extends boolean ? K : never;
+}[keyof T];
+
 type ToggleSection = {
   heading: string;
   toggles: Array<{
-    key: keyof MapLabelVisibility;
+    key: BooleanKeys<MapLabelVisibility>;
     label: string;
     description: string;
   }>;
@@ -65,7 +89,7 @@ const TOGGLE_SECTIONS: ToggleSection[] = [
       {
         key: "poiLabels",
         label: "POI labels",
-        description: "Stadiums, parks (sparse at city zoom)"
+        description: "Stadiums, parks, oceans, lakes, rivers"
       }
     ]
   },
@@ -73,14 +97,19 @@ const TOGGLE_SECTIONS: ToggleSection[] = [
     heading: "Map overlays",
     toggles: [
       {
-        key: "homeBaseIndicator",
-        label: "Home base",
-        description: "Center point + search radius rings"
+        key: "homeBaseIcon",
+        label: "Home base icon",
+        description: "House marker at the center point"
+      },
+      {
+        key: "homeBaseRings",
+        label: "Search radius rings",
+        description: "Concentric proximity rings around home base"
       },
       {
         key: "flightTrail",
         label: "Flight trail",
-        description: "Track line behind the selected flight"
+        description: "Track line behind the selected or nearest flight"
       }
     ]
   }
@@ -141,6 +170,47 @@ export function MapLayersPopover({
               </div>
             </div>
           ))}
+
+          {/* Why: bespoke slider section — Slider's value semantics
+              don't fit the boolean-toggle shape used above, so it
+              gets its own block. Slider takes/returns number arrays
+              (radix supports multi-thumb), so we wrap the scalar
+              roadDimDark in/out as a single-element array. */}
+          <div className="grid gap-2">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Map appearance
+            </p>
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label
+                  htmlFor="map-toggle-roadDimDark"
+                  className="text-xs font-medium"
+                >
+                  Road dim (dark mode)
+                </Label>
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {Math.round(visibility.roadDimDark * 100)}%
+                </span>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Lower = quieter road / highway lines on the dark
+                basemap. No effect in light mode.
+              </p>
+              <Slider
+                id="map-toggle-roadDimDark"
+                min={0}
+                max={1}
+                step={0.05}
+                value={[visibility.roadDimDark]}
+                onValueChange={([next]) =>
+                  onVisibilityChange({
+                    ...visibility,
+                    roadDimDark: next ?? visibility.roadDimDark
+                  })
+                }
+              />
+            </div>
+          </div>
         </div>
       </PopoverContent>
     </Popover>

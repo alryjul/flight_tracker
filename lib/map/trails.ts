@@ -88,14 +88,18 @@ type TrackSegment = [number, number][];
 //
 // Returns: `TrackSegment[]` — array of disjoint polylines. The renderer
 // emits one LineString feature per segment.
+//
+// `providerTrack` is the source-of-truth historical positions for this
+// flight (typically from AeroAPI for the selected flight, or adsb.lol
+// trace for the nearest-candidate prefetch). Pass `[]` when only
+// breadcrumbs are available; the function handles that case naturally.
 export function getSanitizedTrackCoordinates(
-  track: SelectedFlightDetailsResponse["details"] | null,
+  providerTrack: SelectedTrackPoint[],
   breadcrumbPoints: BreadcrumbPoint[],
   renderedPosition: { latitude: number; longitude: number } | null,
   displayedProviderTimestampMs: number | null,
   iconHeadingDegrees: number | null
 ): TrackSegment[] {
-  const providerTrack = track?.track ?? [];
   // Why: the trail tail can be marginally fresher than the animated icon's
   // playback position because the icon coasts off OpenSky/adsb.lol position
   // snapshots (with 4s polls + 2.5s extrapolation) while the trail comes
@@ -347,7 +351,7 @@ const trackSourceLastSelectionId = new WeakMap<GeoJSONSource, string | null>();
 export function setSelectedTrackSourceData(
   source: GeoJSONSource | undefined,
   selectionId: string | null,
-  track: SelectedFlightDetailsResponse["details"] | null,
+  providerTrack: SelectedTrackPoint[],
   breadcrumbPoints: BreadcrumbPoint[],
   renderedPosition: { latitude: number; longitude: number } | null,
   displayedProviderTimestampMs: number | null,
@@ -361,7 +365,7 @@ export function setSelectedTrackSourceData(
   const isSelectionChange = lastSelectionId !== selectionId;
 
   const segments = getSanitizedTrackCoordinates(
-    track,
+    providerTrack,
     breadcrumbPoints,
     renderedPosition,
     displayedProviderTimestampMs,

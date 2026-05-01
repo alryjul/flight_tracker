@@ -1300,3 +1300,4 @@ export async function fetchAeroApiSelectedFlightDetails(
     }
   }
 }
+

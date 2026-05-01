@@ -3,8 +3,8 @@
 // Why: ambient widget styled as an airport split-flap display board.
 // Three hero rows of equal panel size — FLIGHT, FROM, TO — each
 // rendered as a labeled split-flap panel. Supporting flight info
-// (operator, registration, distance, altitude, airspeed) sits below
-// in muted text.
+// (operator, type, distance, altitude, airspeed) sits below in
+// muted text.
 //
 // Theming: wrapped in a forced `dark` className subtree so the whole
 // widget renders against shadcn's dark theme tokens regardless of
@@ -20,11 +20,18 @@
 // flight number both look "in their slot" rather than left-aligned.
 
 import { Helicopter, Plane, Tv } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SplitFlapDisplay } from "@/components/ui/split-flap";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from "@/components/ui/tooltip";
+import {
+  getAircraftManufacturer,
   getAircraftTypeBadgeLabel,
   isHelicopterType,
   resolveAircraftType
@@ -35,8 +42,7 @@ import {
   getOperatorLabel,
   getOperatorLabelTitle,
   getPrimaryIdentifier,
-  getStripRouteLabel,
-  normalizeRegisteredOwnerLabel
+  getStripRouteLabel
 } from "@/lib/flights/display";
 import {
   formatDistanceMiles,
@@ -89,6 +95,7 @@ const SIZE_CLASSES: Record<
 type AmbientViewProps = {
   flight: Flight | null;
   isSelected: boolean;
+  flightsInViewCount: number;
   homeBase: HomeBaseCenter;
   altitudeTrend: TrendDirection;
   airspeedTrend: TrendDirection;
@@ -98,6 +105,7 @@ type AmbientViewProps = {
 export function AmbientView({
   flight,
   isSelected,
+  flightsInViewCount,
   homeBase,
   altitudeTrend,
   airspeedTrend,
@@ -109,35 +117,32 @@ export function AmbientView({
 
   return (
     <AmbientShell>
-      {/* Header — mirrors SelectedFlightCard's pattern of "small dt
-          label + meta on left, badges pinned top-right via
-          items-start." For ambient, the dt is "NEAREST" with bearing
-          + distance inline; the aircraft badge sits top-right.
-          When no flight in range, header still shows the dt with
-          a waiting note in place of the meta. */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={LABEL_CLASS}>
-            {isSelected ? "Selected" : "Nearest"}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {flight ? (
-            <AmbientAircraftTypeBadge aircraftType={flight.aircraftType} />
-          ) : null}
-          {/* Why: ambient toggle — pressed state since the user is
-              currently IN ambient view. Click switches back to
-              sidebar view. Same icon (Tv) as the toggle in the
-              SidebarHeader for a consistent affordance. */}
+      {/* Header — same shape as SidebarHeader's top row: "{count}
+          flights in view" h2 on the left, button stack (ambient
+          exit toggle + theme toggle) pinned right. Aircraft type
+          lives in the InfoStack as a labeled "Type" field instead
+          of a badge here. Context ("Nearest" vs. "Selected") lives
+          on the FLIGHT panel's label below. */}
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="min-w-0 flex-1 text-base leading-tight">
+          <span className="font-semibold tabular-nums">
+            {flightsInViewCount} flights
+          </span>
+          <span className="ml-1 font-normal text-sidebar-foreground/60">
+            in view
+          </span>
+        </h2>
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="icon-xs"
             aria-label="Exit ambient view"
             aria-pressed={true}
             onClick={onExitAmbient}
           >
-            <Tv className="size-4" aria-hidden="true" />
+            <Tv aria-hidden="true" />
           </Button>
+          <ThemeToggle />
         </div>
       </div>
 
@@ -155,14 +160,15 @@ export function AmbientView({
               panel centers. Hiding panels we don't have data for
               keeps the board honest — empty TO slots would invite
               "what's the destination" ambiguity. */}
-          <RouteGrid flight={flight} />
+          <RouteGrid flight={flight} isSelected={isSelected} />
 
           <Separator className="bg-border/60" />
 
-          {/* Operator / Registration / Owner — same dl as
-              SelectedFlightCard's CardContent block. The badge is
-              already top-right of the header above, no inline
-              copy here. */}
+          {/* Operator / Type — same dl shape as SelectedFlightCard's
+              CardContent block, but with Type swapped in for
+              Registration and Owner dropped. Equipment reads better
+              at-a-glance than tail number in ambient mode; operator
+              already conveys "who's flying it." */}
           <InfoStack flight={flight} />
 
           <Separator className="bg-border/60" />
@@ -199,15 +205,21 @@ export function AmbientView({
 // reference theme-aware semantic tokens (bg-card, bg-background,
 // text-foreground, etc.) and they resolve to airport-board colors.
 function AmbientShell({ children }: { children: React.ReactNode }) {
-  // Why: top-left, 20em wide — mirrors the sidebar's position and
-  // approximate width (sidebar is also 20rem). When ambient mode
-  // collapses the sidebar offcanvas, this widget visually replaces
-  // it in the same screen real estate. Forced-dark via the `dark`
-  // wrapper so theme tokens resolve to the airport-board palette
-  // regardless of user theme.
+  // Why: structurally identical to the floating sidebar — outer
+  // container is `fixed inset-y-0 left-0` at `w-(--sidebar-width)`
+  // with `p-2` (8px) padding around the inner panel, exactly mirroring
+  // shadcn's <Sidebar variant="floating">. By replicating the
+  // two-layer structure we get the inner-panel dimensions for free
+  // (the p-2 produces the 8px inset on every side) — no calc()
+  // formula needed.
+  //
+  // Outer is `pointer-events-none` so clicks below the (auto-height)
+  // inner panel pass through to the map; only the inner panel
+  // captures clicks. Forced-dark via `dark` so theme tokens resolve
+  // to the airport-board palette regardless of user theme.
   return (
-    <div className="dark pointer-events-none fixed top-4 left-4 z-30 w-[20em] max-w-[calc(100vw-2rem)]">
-      <div className="pointer-events-auto flex flex-col gap-3 rounded-lg border border-border bg-card px-4 py-4 text-card-foreground shadow-2xl">
+    <div className="dark pointer-events-none fixed inset-y-0 left-0 z-30 w-[var(--sidebar-width,20rem)] max-w-[100vw] p-2">
+      <div className="pointer-events-auto flex flex-col gap-3 rounded-lg bg-sidebar px-3 pt-3 pb-3 text-sidebar-foreground shadow-sm ring-1 ring-sidebar-border">
         {children}
       </div>
     </div>
@@ -225,10 +237,22 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
 // (FROM+TO at 1/4 each) or carries a single panel at full 1/2
 // (FROM-only / TO-only / ROUTE fallback) depending on what data
 // we have.
-function RouteGrid({ flight }: { flight: Flight }) {
+function RouteGrid({
+  flight,
+  isSelected
+}: {
+  flight: Flight;
+  isSelected: boolean;
+}) {
   const origin = flight.origin;
   const destination = flight.destination;
   const flightValue = getPrimaryIdentifier(flight).toUpperCase();
+  // Why: the FLIGHT panel's label carries the context — "SELECTED
+  // FLIGHT" when the user has clicked an aircraft, "NEAREST FLIGHT"
+  // when ambient is auto-tracking the closest one. Replaces the
+  // separate "Selected"/"Nearest" header dt that used to sit above
+  // the panels (redundant once the panel is the focal point).
+  const flightLabel = isSelected ? "Selected Flight" : "Nearest Flight";
 
   // Both endpoints — FLIGHT (1/2) + FROM (1/4) + TO (1/4), all "lg"
   // since short airport codes always render as split-flap and the
@@ -237,7 +261,7 @@ function RouteGrid({ flight }: { flight: Flight }) {
     return (
       <div className="grid grid-cols-[2fr_1fr_1fr] gap-2">
         <HeroPanel
-          label="Flight"
+          label={flightLabel}
           value={flightValue}
           cells={FLIGHT_CELL_LENGTH}
           charSet="alphanumeric"
@@ -266,12 +290,14 @@ function RouteGrid({ flight }: { flight: Flight }) {
   // Two-panel layouts (origin-only / destination-only / fallback).
   // FLIGHT stays at "lg" — it always renders as a split-flap with
   // bounded cell count, never falls back to long text. The route
-  // side stays at "base" because it might carry a long readable
-  // name (LAPD Hooper Heliport) that falls back to truncated text;
-  // smaller font there fits more characters before truncation.
+  // side picks its size dynamically per-render: short codes (≤4
+  // chars: airport IATA, FAA LIDs, "VFR" fallback) get "lg" so they
+  // match the flight number's visual weight; long readable names
+  // (LAPD Hooper Heliport, Cedars-Sinai Medical Center) drop to
+  // "base" so more characters fit before truncation.
   const flightPanelLg = (
     <HeroPanel
-      label="Flight"
+      label={flightLabel}
       value={flightValue}
       cells={FLIGHT_CELL_LENGTH}
       charSet="alphanumeric"
@@ -281,16 +307,17 @@ function RouteGrid({ flight }: { flight: Flight }) {
 
   // Origin only — FLIGHT (1/2) + FROM (1/2).
   if (origin) {
+    const originIsCode = isShortAirportCode(origin);
     return (
       <div className="grid grid-cols-2 gap-2">
         {flightPanelLg}
         <HeroPanel
           label="From"
-          value={isShortAirportCode(origin) ? origin : ""}
+          value={originIsCode ? origin : ""}
           cells={AIRPORT_CELL_LENGTH}
-          fallback={!isShortAirportCode(origin) ? origin : null}
+          fallback={!originIsCode ? origin : null}
           charSet="alphanumericExtra"
-          size="base"
+          size={originIsCode ? "lg" : "base"}
         />
       </div>
     );
@@ -298,16 +325,17 @@ function RouteGrid({ flight }: { flight: Flight }) {
 
   // Destination only — FLIGHT (1/2) + TO (1/2).
   if (destination) {
+    const destinationIsCode = isShortAirportCode(destination);
     return (
       <div className="grid grid-cols-2 gap-2">
         {flightPanelLg}
         <HeroPanel
           label="To"
-          value={isShortAirportCode(destination) ? destination : ""}
+          value={destinationIsCode ? destination : ""}
           cells={AIRPORT_CELL_LENGTH}
-          fallback={!isShortAirportCode(destination) ? destination : null}
+          fallback={!destinationIsCode ? destination : null}
           charSet="alphanumericExtra"
-          size="base"
+          size={destinationIsCode ? "lg" : "base"}
         />
       </div>
     );
@@ -326,7 +354,7 @@ function RouteGrid({ flight }: { flight: Flight }) {
         cells={AIRPORT_CELL_LENGTH}
         fallback={fallbackFitsSplitFlap ? null : fallbackText}
         charSet="alphanumericExtra"
-        size="base"
+        size={fallbackFitsSplitFlap ? "lg" : "base"}
       />
     </div>
   );
@@ -401,45 +429,45 @@ function isShortAirportCode(value: string | null): value is string {
   return value != null && value.length > 0 && value.length <= 4;
 }
 
-// Why: ambient-sized aircraft type badge — strips the Tooltip wrapper
-// from SelectedFlightCard's version (overkill for an at-a-glance
-// surface) but keeps the manufacturer-prefixed full name available
-// via a native title attribute. So the badge shows "737-800" and
-// hovering reveals "Boeing 737-800" — same info access, less DOM.
-function AmbientAircraftTypeBadge({
-  aircraftType
-}: {
-  aircraftType: string | null;
-}) {
-  const resolved = resolveAircraftType(aircraftType);
-  const label = getAircraftTypeBadgeLabel(aircraftType);
-  const Icon = isHelicopterType(aircraftType) ? Helicopter : Plane;
-  return (
-    <Badge
-      variant="secondary"
-      className="text-xs"
-      title={resolved?.full ?? label}
-    >
-      <Icon aria-hidden="true" />
-      {label}
-    </Badge>
-  );
-}
-
-// Why: operator + registration + owner block. Same dl shape as
-// SelectedFlightCard but smaller and muted (text-xs labels, text-xs
-// values) — the hero rows above are the focus, this is just
-// supporting detail.
+// Why: operator + type block. Same dl shape as SelectedFlightCard's
+// CardContent block but with Type swapped in for Registration —
+// equipment is more useful at-a-glance in ambient mode than tail
+// number, and the tail number remains visible in the FLIGHT panel
+// for GA / private flights via getPrimaryIdentifier. Owner is
+// intentionally omitted: the operator label already covers "who's
+// flying it" for our purposes here.
 function InfoStack({ flight }: { flight: Flight }) {
   const operatorLabel = getOperatorLabel(flight);
   const operatorTitle = getOperatorLabelTitle(flight);
-  const showRegistration =
-    flight.registration != null &&
-    getPrimaryIdentifier(flight) !== flight.registration;
-  const ownerLabel = normalizeRegisteredOwnerLabel(flight.registeredOwner);
-  const showOwner = ownerLabel != null && ownerLabel !== operatorLabel;
 
-  if (!operatorLabel && !showRegistration && !showOwner) return null;
+  // Why: show "manufacturer + sanitized short label" inline ("Boeing
+  // 737-800", "Airbus AS350") alongside a Plane / Helicopter icon,
+  // and surface the full curated name + raw ICAO designator in a
+  // tooltip. Manufacturer comes from `getAircraftManufacturer` —
+  // it strips the parenthetical noise that lives on `full`
+  // ("(Eurocopter AS350)") and handles known multi-word brands.
+  // We dedupe when the short label already starts with the
+  // manufacturer ("Bell 206" / "MD 520N") so we don't double-print
+  // the brand. Mirrors the AircraftTypeBadge pattern in
+  // SelectedFlightCard so the affordance is consistent across
+  // surfaces. Hide the field entirely when the type is genuinely
+  // unknown — "Unknown type" reads as missing data, not informative.
+  const typeResolved = resolveAircraftType(flight.aircraftType);
+  const typeShortLabel = getAircraftTypeBadgeLabel(flight.aircraftType);
+  const typeManufacturer = getAircraftManufacturer(flight.aircraftType);
+  const typeShortStartsWithManufacturer =
+    typeManufacturer != null &&
+    typeShortLabel
+      .toLowerCase()
+      .startsWith(`${typeManufacturer.toLowerCase()} `);
+  const typeDisplayLabel =
+    typeManufacturer && !typeShortStartsWithManufacturer
+      ? `${typeManufacturer} ${typeShortLabel}`
+      : typeShortLabel;
+  const showType = typeShortLabel !== "Unknown type";
+  const TypeIcon = isHelicopterType(flight.aircraftType) ? Helicopter : Plane;
+
+  if (!operatorLabel && !showType) return null;
 
   return (
     <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
@@ -447,7 +475,7 @@ function InfoStack({ flight }: { flight: Flight }) {
         <div
           className={cn(
             "flex min-w-0 flex-col gap-1",
-            !showRegistration && "col-span-2"
+            !showType && "col-span-2"
           )}
         >
           <dt className={LABEL_CLASS}>{operatorTitle}</dt>
@@ -456,24 +484,50 @@ function InfoStack({ flight }: { flight: Flight }) {
           </dd>
         </div>
       ) : null}
-      {showRegistration ? (
+      {showType ? (
         <div
           className={cn(
             "flex min-w-0 flex-col gap-1",
             !operatorLabel && "col-span-2"
           )}
         >
-          <dt className={LABEL_CLASS}>Registration</dt>
-          <dd className={cn("truncate font-medium tabular-nums", VALUE_LEADING)}>
-            {flight.registration}
-          </dd>
-        </div>
-      ) : null}
-      {showOwner ? (
-        <div className="col-span-2 flex min-w-0 flex-col gap-1">
-          <dt className={LABEL_CLASS}>Owner</dt>
-          <dd className={cn("truncate font-medium", VALUE_LEADING)}>
-            {ownerLabel}
+          <dt className={LABEL_CLASS}>Type</dt>
+          <dd
+            className={cn(
+              "flex items-center gap-1.5 truncate font-medium",
+              VALUE_LEADING
+            )}
+          >
+            <TypeIcon
+              aria-hidden="true"
+              className="size-3 shrink-0 text-muted-foreground"
+            />
+            {typeResolved ? (
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-help truncate" tabIndex={0}>
+                      {typeDisplayLabel}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="bottom"
+                    align="start"
+                    className="flex flex-col gap-0.5"
+                  >
+                    {flight.aircraftType ? (
+                      <span className="tabular-nums">
+                        <span className="text-background/70">ICAO </span>
+                        {flight.aircraftType.trim().toUpperCase()}
+                      </span>
+                    ) : null}
+                    <span>{typeResolved.full}</span>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : (
+              <span className="truncate">{typeDisplayLabel}</span>
+            )}
           </dd>
         </div>
       ) : null}

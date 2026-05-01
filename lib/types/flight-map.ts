@@ -95,6 +95,15 @@ export type FlightAnimationState = {
   // --- Auxiliary (heading/speed for trail filtering, breadcrumbs, debug) ---
   targetGroundspeedKnots: number | null;
   targetHeadingDegrees: number | null;
+
+  // --- Heading chase (separate τ from position; see HEADING_SPRING_TAU_SEC) ---
+  // Why: parallel `from` for the heading chase. Captured at every target
+  // update from the spring's current evaluated heading (same trick as
+  // `fromLatitude`/`fromLongitude`) so the chase continues smoothly through
+  // each new reported value. `null` means "no prior heading to chase from"
+  // — first sight of a flight, or transitioning out of a null-heading
+  // stretch — in which case the spring snaps to target instantly.
+  fromHeadingDegrees: number | null;
 };
 
 export type BreadcrumbPoint = {
@@ -110,6 +119,17 @@ export type FlightBreadcrumbBuffer = {
 export type SelectedTrackPoint = NonNullable<SelectedFlightDetailsResponse["details"]>["track"][number];
 
 export type TrendDirection = "up" | "down" | null;
+
+// Why: rectangular lat/lng bounds reported by the map on viewport
+// changes (pan / zoom / fit). Used to filter "flights in view" so the
+// count reflects what's actually visible on screen, not just what the
+// polling area returned.
+export type ViewportBounds = {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+};
 
 export type RememberedFlightMetadata = Partial<
   Pick<Flight, "aircraftType" | "registration" | "registeredOwner">

@@ -15,6 +15,7 @@ import {
 import type { AeroApiFeedMetadata } from "@/lib/flights/aeroapi";
 import { getPrimaryIdentifier } from "@/lib/flights/display";
 import { getFlightMetricHistory, getMetricTrend } from "@/lib/flights/metrics";
+import { pickPredictedNearestFlights } from "@/lib/flights/predictedNearest";
 import {
   getFlightProviderTimestampSec,
   getIdentityScopedValue,
@@ -56,6 +57,7 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 import { AreaConfigPopover } from "@/components/flight-tracker/AreaConfigPopover";
 import { FlightList } from "@/components/flight-tracker/FlightList";
+import { useAutoHideCursor } from "@/hooks/use-auto-hide-cursor";
 import { MapCanvas } from "@/components/flight-tracker/MapCanvas";
 import { AmbientView } from "@/components/flight-tracker/AmbientView";
 import {
@@ -78,7 +80,8 @@ import type {
   HoveredFlightState,
   IdentityScopedValue,
   RememberedFlightMetadata,
-  SelectedFlightDetailsResponse
+  SelectedFlightDetailsResponse,
+  ViewportBounds
 } from "@/lib/types/flight-map";
 import {
   AIRSPEED_TREND_THRESHOLD_KNOTS,
@@ -86,10 +89,16 @@ import {
   BREADCRUMB_LEG_BREAK_GAP_MS,
   FLIGHT_BREADCRUMB_BUFFER_MAX_POINTS,
   FLIGHT_BREADCRUMB_BUFFER_RETENTION_MS,
+  AMBIENT_MODE_STORAGE_KEY,
   HIDDEN_TAB_REFRESH_MS,
   HOME_BASE_STORAGE_KEY,
+  MAP_LABEL_VISIBILITY_STORAGE_KEY,
   SELECTED_ENRICHMENT_RETRY_DELAYS_MS,
   SNAPSHOT_HISTORY_RETENTION_MS,
+  NEAREST_FORCE_SWITCH_MARGIN_MILES,
+  NEAREST_HYSTERESIS_MARGIN_MILES,
+  NEAREST_MIN_HOLD_MS,
+  NEAREST_TRACE_PREFETCH_COUNT,
   STRIP_RANK_CUE_MS,
   STRIP_REORDER_INTERVAL_MS,
   STRIP_REORDER_RANK_THRESHOLD,
@@ -134,6 +143,14 @@ export function FlightMap() {
   // Toggleable; the map keeps polling underneath so re-entering
   // returns to the live session immediately.
   const [ambientMode, setAmbientMode] = useState(false);
+
+  // Why: hide the cursor after a short idle period so it doesn't sit
+  // on the screen as a permanent distraction in ambient / kiosk
+  // viewing. Tighter timeout in ambient mode (cursor is essentially
+  // useless there) than in normal interactive mode (where the user
+  // is more likely to want it back quickly when they reach for the
+  // mouse). See hooks/use-auto-hide-cursor.ts.
+  useAutoHideCursor(ambientMode ? 5000 : 10000);
 
   // Why: drive the sidebar's open state from ambient mode — when the
   // user enters ambient, collapse the sidebar so the chrome gets out
@@ -195,6 +212,14 @@ export function FlightMap() {
     Record<string, IdentityScopedValue<SelectedFlightDetailsResponse["details"]>>
   >({});
   const selectedFlightIdRef = useRef<string | null>(null);
+  // Why: ID of the auto-tracked nearest flight, mirrored to a ref so
+  // the RAF map-render loop can read it without re-establishing on
+  // every re-render. Stays null whenever a flight is selected (we
+  // don't double-highlight); otherwise tracks the closest flight
+  // to home base. The map paints this flight with the orange marker
+  // (no halo) so the user can see at a glance which plane the
+  // sidebar's "Nearest now" button or the ambient widget refers to.
+  const nearestFlightIdRef = useRef<string | null>(null);
   const selectedRenderedPositionRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const homeBaseFeatures = useMemo(() => buildHomeBaseFeatures(homeBase), [homeBase]);
   const openingBounds = useMemo(
@@ -350,7 +375,20 @@ export function FlightMap() {
 
   const visibleFlights = useMemo(() => {
     const flightsById = new Map(flights.map((flight) => [flight.id, flight]));
-    const orderedIds = reconcileFlightOrder(visibleFlightIds, flights.map((flight) => flight.id));
+    // Why: the effect at ~line 285 maintains `visibleFlightIds` capped
+    // at VISIBLE_FLIGHT_LIMIT (curating by rank + linger + selected).
+    // We keep the reconcile here so first-load doesn't flash empty —
+    // when visibleFlightIds is `[]`, reconcile populates ordered IDs
+    // from the latest poll (already distance-sorted by the BE). But
+    // we MUST slice to VISIBLE_FLIGHT_LIMIT, otherwise the reconcile
+    // appends every uncapped ID from `flights` (up to the BE's
+    // DISCOVERY_FLIGHT_CANDIDATE_LIMIT of 80) and silently bypasses
+    // the cap. Without this slice, "{N} flights in view" would happily
+    // climb past 50 even though the constant says it shouldn't.
+    const orderedIds = reconcileFlightOrder(
+      visibleFlightIds,
+      flights.map((flight) => flight.id)
+    ).slice(0, VISIBLE_FLIGHT_LIMIT);
 
     return orderedIds
       .map((flightId) => flightsById.get(flightId))
@@ -390,6 +428,28 @@ export function FlightMap() {
   useEffect(() => {
     displayFlightsRef.current = displayFlights;
   }, [displayFlights]);
+
+  // Why: track the actual map viewport bounds so the "{N} flights in
+  // view" count reflects what's literally on screen, not just what
+  // /api/flights returned for the configured polling area. The
+  // polling area is a fixed radius around home base; the map can be
+  // panned / zoomed independently. Before this, the count read "61"
+  // even when the user had zoomed in to 5 visible markers — confusing
+  // and dishonest. Bounds are reported by MapCanvas on map load and
+  // every `moveend`. Null until the map mounts; we fall back to
+  // displayFlights.length so first paint isn't blank.
+  const [viewportBounds, setViewportBounds] = useState<ViewportBounds | null>(null);
+  const flightsInViewportCount = useMemo(() => {
+    if (!viewportBounds) return displayFlights.length;
+    return displayFlights.filter(
+      (flight) =>
+        flight.latitude >= viewportBounds.south &&
+        flight.latitude <= viewportBounds.north &&
+        flight.longitude >= viewportBounds.west &&
+        flight.longitude <= viewportBounds.east
+    ).length;
+  }, [displayFlights, viewportBounds]);
+
   // Why: only resolve a selected flight when there's an explicit
   // selectedFlightId state. Previously this fell back to
   // displayFlights[0] when no selection existed — which meant
@@ -500,6 +560,98 @@ export function FlightMap() {
     );
   }, [homeBase, radiusMiles]);
 
+  // Why: hydrate the map label/overlay/road-dim toggles from
+  // localStorage on first mount. Same shape as the home-base
+  // hydration above. We can't use a lazy useState initializer
+  // because that runs during SSR where window.localStorage doesn't
+  // exist; this effect-based hydration accepts a one-frame flash of
+  // defaults but avoids hydration mismatch and SSR explosion.
+  //
+  // Each key is validated independently so:
+  //   - corrupt JSON falls back to defaults (catch)
+  //   - missing keys (older saves before a field was added) keep
+  //     their default value
+  //   - wrong-type values (e.g. someone hand-edited localStorage to
+  //     stuff a string in roadDimDark) get rejected per-field
+  // The merge is field-by-field rather than spread because we want
+  // to ignore garbage rather than blindly accept it.
+  useEffect(() => {
+    const stored = window.localStorage.getItem(
+      MAP_LABEL_VISIBILITY_STORAGE_KEY
+    );
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as Partial<
+        Record<keyof MapLabelVisibility, unknown>
+      >;
+      setMapLabelVisibility((prev) => {
+        const next: MapLabelVisibility = { ...prev };
+        const booleanKeys: Array<keyof MapLabelVisibility> = [
+          "placeLabels",
+          "roadLabels",
+          "poiLabels",
+          "homeBaseIcon",
+          "homeBaseRings",
+          "flightTrail"
+        ];
+        for (const key of booleanKeys) {
+          if (typeof parsed[key] === "boolean") {
+            (next[key] as boolean) = parsed[key] as boolean;
+          }
+        }
+        if (
+          typeof parsed.roadDimDark === "number" &&
+          Number.isFinite(parsed.roadDimDark) &&
+          parsed.roadDimDark >= 0 &&
+          parsed.roadDimDark <= 1
+        ) {
+          next.roadDimDark = parsed.roadDimDark;
+        }
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to restore saved map label visibility", error);
+    }
+  }, []);
+
+  // Why: persist on every change. Same eager-write pattern as the
+  // home-base block — JSON.stringify on every keystroke of the
+  // slider is fine (the object is tiny and writes are synchronous,
+  // single-digit μs).
+  useEffect(() => {
+    window.localStorage.setItem(
+      MAP_LABEL_VISIBILITY_STORAGE_KEY,
+      JSON.stringify(mapLabelVisibility)
+    );
+  }, [mapLabelVisibility]);
+
+  // Why: hydrate ambient/kiosk mode from localStorage on first mount.
+  // Same effect-after-mount pattern as the other persisted view
+  // settings (no lazy useState initializer because window.localStorage
+  // doesn't exist during SSR). One-frame flash of `false` before the
+  // hydration lands is acceptable — the ambient view is fullscreen
+  // chrome, not interactive map state, so the brief flicker is no
+  // worse than the cold-start theme detection.
+  useEffect(() => {
+    const stored = window.localStorage.getItem(AMBIENT_MODE_STORAGE_KEY);
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as unknown;
+      if (typeof parsed === "boolean") {
+        setAmbientMode(parsed);
+      }
+    } catch (error) {
+      console.error("Failed to restore saved ambient mode", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      AMBIENT_MODE_STORAGE_KEY,
+      JSON.stringify(ambientMode)
+    );
+  }, [ambientMode]);
+
   useEffect(() => {
     feedWarmEnabledRef.current = false;
     setFeedWarmEnabled(false);
@@ -587,6 +739,7 @@ export function FlightMap() {
       const currentFlights = currentFlightsRef.current;
       const stabilizedFlights = stabilizeFlightsForJitter(sortedFlights, currentFlights);
       const capturedAt = performance.now();
+
 
       setFlights((currentFlights) => {
         if (isFallbackSnapshot && currentFlights.length > 0) {
@@ -1024,6 +1177,100 @@ export function FlightMap() {
     selectedMetadataByIdRef.current = selectedMetadataById;
   }, [selectedMetadataById]);
 
+  // Why: opportunistic prefetch — fire /api/flights/selected for the
+  // top-N predicted-nearest flights so their full enrichment (status,
+  // schedule times, IATA flight number, route, full provider track)
+  // is already in `selectedMetadataById` by the time the nearest
+  // pointer transitions to any of them. Same call, same cache, same
+  // storage as the user-selected fetch. The only "nearest"-specific
+  // logic is the heuristic that picks WHICH flights to prefetch —
+  // everything downstream (merge pipeline, hero card, map trail) is
+  // shared with the selected case.
+  //
+  // Reads `selectedMetadataByIdRef.current` (not the state) so the
+  // effect doesn't re-run on every state update — only when the
+  // top-N candidate set could have meaningfully changed
+  // (displayFlights or selectedFlightId). Filters out the selected
+  // flight (its dedicated effect handles it) and any candidate that
+  // already has a cached entry. Server-side cache (DETAIL_TTL_MS =
+  // 2 min) absorbs intra-window calls; cross-window we re-fire on
+  // the next candidate-set change.
+  useEffect(() => {
+    if (displayFlights.length === 0) return;
+
+    const candidates = pickPredictedNearestFlights(
+      displayFlights,
+      homeBase,
+      NEAREST_TRACE_PREFETCH_COUNT
+    ).filter((candidate) => {
+      if (candidate.id === selectedFlightId) return false;
+      const existing = getIdentityScopedValue(
+        selectedMetadataByIdRef.current[candidate.id],
+        candidate
+      );
+      return existing == null;
+    });
+
+    if (candidates.length === 0) return;
+
+    let cancelled = false;
+    const controllers: AbortController[] = [];
+
+    for (const candidate of candidates) {
+      const controller = new AbortController();
+      controllers.push(controller);
+
+      const params = new URLSearchParams({
+        id: candidate.id,
+        callsign: candidate.callsign
+      });
+      // Why: pass through every metadata field the server route
+      // accepts via getFlightFromSearchParams — the route builds a
+      // synthetic Flight from these for AeroAPI matching, and the
+      // more it knows the better the match. Mirrors what the
+      // selected-flight effect builds.
+      if (candidate.flightNumber)
+        params.set("flightNumber", candidate.flightNumber);
+      if (candidate.airline) params.set("airline", candidate.airline);
+      if (candidate.aircraftType)
+        params.set("aircraftType", candidate.aircraftType);
+      if (candidate.origin) params.set("origin", candidate.origin);
+      if (candidate.destination)
+        params.set("destination", candidate.destination);
+      if (candidate.registration)
+        params.set("registration", candidate.registration);
+      if (candidate.registeredOwner)
+        params.set("registeredOwner", candidate.registeredOwner);
+
+      fetch(`/api/flights/selected?${params.toString()}`, {
+        cache: "no-store",
+        signal: controller.signal
+      })
+        .then((response) =>
+          response.ok ? (response.json() as Promise<SelectedFlightDetailsResponse>) : null
+        )
+        .then((data) => {
+          if (cancelled || !data?.details) return;
+          setSelectedMetadataById((current) => ({
+            ...current,
+            [candidate.id]: {
+              identityKey: getLiveFlightIdentityKey(candidate),
+              value: data.details
+            }
+          }));
+        })
+        .catch(() => {
+          // Silent — opportunistic enrichment. Next candidate-set
+          // change re-runs us; abort cleanup is the cancelled path.
+        });
+    }
+
+    return () => {
+      cancelled = true;
+      for (const controller of controllers) controller.abort();
+    };
+  }, [displayFlights, selectedFlightId, homeBase]);
+
   useEffect(() => {
     hoveredStripFlightIdRef.current = hoveredStripFlightId;
   }, [hoveredStripFlightId]);
@@ -1172,20 +1419,97 @@ export function FlightMap() {
     }
   }, [displayFlights, hoveredStripFlightId]);
 
-  const nearestFlight = useMemo(
-    () =>
-      displayFlights.reduce<Flight | null>((nearest, flight) => {
-        if (!nearest) {
-          return flight;
-        }
-
-        return getDistanceFromHomeBaseMiles(flight, homeBase) <
-          getDistanceFromHomeBaseMiles(nearest, homeBase)
-          ? flight
-          : nearest;
-      }, null),
-    [displayFlights, homeBase]
+  // Why: hysteresis on the auto-tracked nearest. Naive "always pick
+  // the current closest" thrashes — orange-dot, trail, hero card,
+  // ambient widget all flip every time two flights' distances cross,
+  // which happens often when planes are approaching and departing
+  // simultaneously. We sticky-keep the current pick for at least
+  // NEAREST_MIN_HOLD_MS, and after that require a new candidate to
+  // be NEAREST_HYSTERESIS_MARGIN_MILES closer than the sticky pick
+  // before swapping. The force-switch override fires immediately
+  // when something is dramatically closer (NEAREST_FORCE_SWITCH_-
+  // MARGIN_MILES) — a plane RIGHT OVER home base shouldn't have to
+  // wait its turn just because another plane was closest a second
+  // ago. The current sticky decision is held in a ref, mutated
+  // during the memo (acceptable: refs don't trigger re-renders).
+  const stickyNearestRef = useRef<{ id: string; selectedAt: number } | null>(
+    null
   );
+  const nearestFlight = useMemo<Flight | null>(() => {
+    if (displayFlights.length === 0) {
+      stickyNearestRef.current = null;
+      return null;
+    }
+
+    let rawClosest: Flight | null = null;
+    let rawClosestDistance = Number.POSITIVE_INFINITY;
+    for (const flight of displayFlights) {
+      const dist = getDistanceFromHomeBaseMiles(flight, homeBase);
+      if (dist < rawClosestDistance) {
+        rawClosest = flight;
+        rawClosestDistance = dist;
+      }
+    }
+    if (!rawClosest) {
+      stickyNearestRef.current = null;
+      return null;
+    }
+
+    const now = Date.now();
+    const sticky = stickyNearestRef.current;
+    const stickyFlight =
+      sticky != null
+        ? displayFlights.find((flight) => flight.id === sticky.id) ?? null
+        : null;
+
+    // No prior sticky, or it's no longer in displayFlights — adopt
+    // the raw closest immediately.
+    if (sticky == null || stickyFlight == null) {
+      stickyNearestRef.current = { id: rawClosest.id, selectedAt: now };
+      return rawClosest;
+    }
+
+    // Same flight is still the raw closest — keep going.
+    if (sticky.id === rawClosest.id) {
+      return stickyFlight;
+    }
+
+    const stickyDistance = getDistanceFromHomeBaseMiles(stickyFlight, homeBase);
+    const margin = stickyDistance - rawClosestDistance;
+    const heldFor = now - sticky.selectedAt;
+
+    // Force-switch: new candidate is dramatically closer (e.g., a
+    // plane just appeared right over home base). Override the hold.
+    if (margin >= NEAREST_FORCE_SWITCH_MARGIN_MILES) {
+      stickyNearestRef.current = { id: rawClosest.id, selectedAt: now };
+      return rawClosest;
+    }
+
+    // Within the minimum hold window — keep the sticky pick.
+    if (heldFor < NEAREST_MIN_HOLD_MS) {
+      return stickyFlight;
+    }
+
+    // Hold elapsed — switch only if the new candidate is meaningfully
+    // closer than the sticky pick. The margin filter prevents
+    // oscillation when two planes are essentially equidistant.
+    if (margin < NEAREST_HYSTERESIS_MARGIN_MILES) {
+      return stickyFlight;
+    }
+
+    stickyNearestRef.current = { id: rawClosest.id, selectedAt: now };
+    return rawClosest;
+  }, [displayFlights, homeBase]);
+
+  // Why: only paint the nearest highlight when there's no explicit
+  // selection. With a selection, the selected halo + dot already
+  // signals "this is what we're focused on" — adding a second orange
+  // dot for nearest would be visual noise. Mirroring to a ref keeps
+  // the high-frequency RAF map-render loop reading from a stable
+  // location without re-establishing on every poll.
+  useEffect(() => {
+    nearestFlightIdRef.current = selectedFlightId ? null : nearestFlight?.id ?? null;
+  }, [nearestFlight, selectedFlightId]);
 
   // Why: ambient view subject — prefer the user-selected flight when one
   // is selected, fall back to the auto-tracked nearest. AmbientView's
@@ -1303,6 +1627,16 @@ export function FlightMap() {
     }));
   }
 
+  // Why: snap the map view back to the home base + radius without
+  // touching any state. Reuses the same `openingBounds` calculation
+  // that drives the initial fit on map load — fitBounds keeps the
+  // home base visually centered and the search radius rings fully in
+  // view at the standard padding.
+  function recenterMap() {
+    if (!mapRef.current) return;
+    mapRef.current.fitBounds(openingBounds, { padding: 40, duration: 400 });
+  }
+
   function useCurrentLocation() {
     if (!navigator.geolocation) {
       setAreaError("Current location is not supported in this browser.");
@@ -1378,6 +1712,7 @@ export function FlightMap() {
         snapshotHistoryRef={snapshotHistoryRef}
         flightBreadcrumbsRef={flightBreadcrumbsRef}
         selectedFlightIdRef={selectedFlightIdRef}
+        nearestFlightIdRef={nearestFlightIdRef}
         hoveredFlightIdRef={hoveredFlightIdRef}
         hoveredStripFlightIdRef={hoveredStripFlightIdRef}
         hoveredStripStartedAtRef={hoveredStripStartedAtRef}
@@ -1388,6 +1723,7 @@ export function FlightMap() {
         onSelectFlight={setSelectedFlightId}
         onDeselectFlight={handleDeselectFlight}
         onHoverFlight={setHoveredFlight}
+        onViewportChange={setViewportBounds}
         mapLabelVisibility={mapLabelVisibility}
       />
 
@@ -1396,25 +1732,35 @@ export function FlightMap() {
           <div className="flex items-center justify-between gap-2">
             <h2 className="min-w-0 flex-1 text-base leading-tight">
               <span className="font-semibold tabular-nums">
-                {displayFlights.length} flights
+                {flightsInViewportCount} flights
               </span>
               <span className="ml-1 font-normal text-sidebar-foreground/60">
                 in view
               </span>
             </h2>
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon-xs"
                 aria-label="Show ambient view"
                 aria-pressed={ambientMode}
                 onClick={() => setAmbientMode(true)}
               >
-                <Tv className="size-4" aria-hidden="true" />
+                <Tv aria-hidden="true" />
               </Button>
               <ThemeToggle />
             </div>
           </div>
+          {/* Why: "Nearest now" pill — always visible (when a nearest
+              exists) so the user can see what plane is currently
+              closest to home base regardless of whether they have
+              another flight selected. Click to promote the nearest
+              to the user's selection (swaps the orange-no-halo
+              treatment for the full selected halo + dot, brings up
+              its full details in the hero card). When nothing is
+              selected, the hero card already shows this same plane —
+              the pill stays for consistent placement and continues
+              to indicate "this is the auto-tracked nearest." */}
           {nearestFlight ? (
             <button
               className="flex items-center justify-between gap-2 rounded-md border border-sidebar-border bg-sidebar-accent/40 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent"
@@ -1433,6 +1779,20 @@ export function FlightMap() {
         </SidebarHeader>
 
         <SidebarContent className="gap-0 overflow-hidden px-2">
+          {/* Why: hero card shows the user's selection when they've
+              picked one, otherwise auto-tracks the nearest flight —
+              same selected-or-nearest pattern used by the ambient
+              widget. The "this is the nearest" signal lives in the
+              pill above (in SidebarHeader) and in the orange-no-halo
+              marker on the map; the card itself stays clean and
+              uniform across the two states. AeroAPI-derived
+              `details` are passed only for the selected case (we
+              don't burn a per-poll /api/flights/selected call on the
+              nearest); the card tolerates `details=null` and just
+              hides the status / schedule lines in that case. Trends
+              for the nearest case use ambientAltitudeTrend /
+              ambientAirspeedTrend, which are computed against
+              ambientFlight === nearestFlight when no selection. */}
           {selectedFlightDisplay ? (
             <SelectedFlightCard
               flight={selectedFlightDisplay}
@@ -1440,6 +1800,19 @@ export function FlightMap() {
               homeBase={homeBase}
               altitudeTrend={altitudeTrend}
               airspeedTrend={airspeedTrend}
+            />
+          ) : nearestFlight ? (
+            <SelectedFlightCard
+              flight={nearestFlight}
+              details={
+                getIdentityScopedValue(
+                  selectedMetadataById[nearestFlight.id],
+                  nearestFlight
+                ) ?? null
+              }
+              homeBase={homeBase}
+              altitudeTrend={ambientAltitudeTrend}
+              airspeedTrend={ambientAirspeedTrend}
             />
           ) : null}
           <FlightList
@@ -1459,13 +1832,18 @@ export function FlightMap() {
         </SidebarFooter>
       </Sidebar>
 
-      <MapHoverCard hoveredFlight={hoveredFlight} hoveredFlightDisplay={hoveredFlightDisplay} />
+      <MapHoverCard
+        hoveredFlight={hoveredFlight}
+        hoveredFlightDisplay={hoveredFlightDisplay}
+        homeBase={homeBase}
+      />
       <SidebarTrigger className="fixed top-4 left-4 z-20 md:hidden" />
 
       {ambientMode ? (
         <AmbientView
           flight={ambientFlight}
           isSelected={ambientFlightIsSelected}
+          flightsInViewCount={flightsInViewportCount}
           homeBase={homeBase}
           altitudeTrend={ambientAltitudeTrend}
           airspeedTrend={ambientAirspeedTrend}
@@ -1497,6 +1875,7 @@ export function FlightMap() {
           onUseMapCenter={setDraftFromMapCenter}
           onUseLocation={useCurrentLocation}
           onApply={applyAreaDraft}
+          onRecenterMap={recenterMap}
         />
       </div>
     </>

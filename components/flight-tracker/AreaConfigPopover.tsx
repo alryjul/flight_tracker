@@ -1,6 +1,6 @@
 "use client";
 
-import { MapPin } from "lucide-react";
+import { Crosshair, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +19,11 @@ type AreaConfigPopoverProps = {
   onUseMapCenter: () => void;
   onUseLocation: () => void;
   onApply: () => void;
+  // Why: snap the map view back to the configured home base + radius
+  // without changing any state. Used when the user has panned/zoomed
+  // away from home and wants to return — just a view action, doesn't
+  // touch the area config or the form draft.
+  onRecenterMap: () => void;
 };
 
 export function AreaConfigPopover({
@@ -31,7 +36,8 @@ export function AreaConfigPopover({
   onDraftChange,
   onUseMapCenter,
   onUseLocation,
-  onApply
+  onApply,
+  onRecenterMap
 }: AreaConfigPopoverProps) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -109,6 +115,10 @@ export function AreaConfigPopover({
             />
           </div>
           <div className="flex flex-wrap gap-1.5">
+            <Button onClick={onRecenterMap} size="sm" type="button" variant="outline">
+              <Crosshair aria-hidden="true" />
+              Recenter
+            </Button>
             <Button onClick={onUseMapCenter} size="sm" type="button" variant="outline">
               Use map center
             </Button>

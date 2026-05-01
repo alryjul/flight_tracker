@@ -2,8 +2,72 @@ export const refreshMs = 4000;
 export const HIDDEN_TAB_REFRESH_MS = 30_000;
 export const PROXIMITY_RING_MILES = [3, 8];
 export const HOME_BASE_STORAGE_KEY = "flight-tracker-home-base";
+// Why: map label/overlay/road-dim toggles are user-tuned to taste and
+// nothing else (no API state, no per-session staleness), so they should
+// survive page reload. Stored as a single JSON object — the hydration
+// effect merges with DEFAULT_MAP_LABEL_VISIBILITY so adding a new key
+// to the type never invalidates existing saves.
+export const MAP_LABEL_VISIBILITY_STORAGE_KEY =
+  "flight-tracker-map-label-visibility";
+// Why: ambient/kiosk view is a sticky preference — a TV in the corner
+// running ambient mode should resume in ambient after a reload (or
+// after an unattended browser restart), and a dev who toggled out of
+// ambient on their laptop shouldn't have to re-toggle on the next
+// page load. Single boolean stored as JSON for parity with the other
+// keys in this file.
+export const AMBIENT_MODE_STORAGE_KEY = "flight-tracker-ambient-mode";
 export const VISIBLE_FLIGHT_LIMIT = 50;
 export const VISIBLE_FLIGHT_ENTRY_COUNT = 45;
+// Why: how many predicted-nearest flights get their full enrichment
+// (track + AeroAPI details) prefetched by the client. The "nearest"
+// plane changes as planes move; firing /api/flights/selected for the
+// top-N candidates by predicted-minimum-distance over the next ~60s
+// (closest-approach math, see `predictedMinDistanceMiles` in
+// lib/flights/predictedNearest.ts) means the data is already in the
+// shared selectedMetadataById store by the time the nearest pointer
+// transitions to any of them — no thrashing, no waiting on a
+// per-handoff round-trip.
+//
+// Architecturally: this is the SAME endpoint the user-selected flow
+// uses. We're just heuristically firing it for additional candidates.
+// One pattern, applied to two trigger sources (user-click for
+// selected, predicted-nearest heuristic for the auto-tracked).
+//
+// Sized aggressively for cheapness: 2 = current nearest + the most
+// likely single next-handoff candidate. With the prediction
+// heuristic doing the ranking (rather than naive sort by current
+// distance), top-2 covers ~90–95% of real-world transitions —
+// most handoffs are sequential (plane A is nearest now, plane B
+// is approaching and will be nearest soon).
+export const NEAREST_TRACE_PREFETCH_COUNT = 2;
+
+// Why: hysteresis on the auto-tracked "nearest" pick. Without this,
+// the nearest pointer would jump every time two planes' distances
+// crossed — e.g., one approaching (3.2 → 2.8 mi) and another
+// departing (2.9 → 3.1 mi) flip back and forth at every poll, which
+// makes the orange-dot, the trail, the sidebar hero, and the ambient
+// widget thrash visibly.
+//
+// The pick is made sticky two ways:
+//   1. NEAREST_MIN_HOLD_MS = minimum time the current nearest is
+//      kept regardless of who else is closer. Long enough to ride
+//      out a short pass-by; short enough to never feel "stuck."
+//   2. NEAREST_HYSTERESIS_MARGIN_MILES = a new candidate must be at
+//      least this much closer than the current sticky pick to take
+//      over (after the hold time elapses). Prevents the "they're
+//      essentially equidistant" oscillation.
+//
+// Reset cases (immediate switch, no hold):
+//   - Sticky flight is no longer in displayFlights (departed)
+//   - There's a clear gap (~3+ mi closer) — the user almost certainly
+//     cares about the genuinely-much-closer plane immediately.
+export const NEAREST_MIN_HOLD_MS = 1000 * 20;
+export const NEAREST_HYSTERESIS_MARGIN_MILES = 0.5;
+// Why: even within the minimum-hold window, if a new candidate is
+// dramatically closer (multiple miles), we should switch — otherwise
+// a plane RIGHT OVER home base can be ignored because the previous
+// pick just landed. This threshold is the "force switch" override.
+export const NEAREST_FORCE_SWITCH_MARGIN_MILES = 3.0;
 // Why: bumping the exit rank from 60 → 80 widens the hysteresis band a
 // flight has to cross before it gets retracted. Combined with the score's
 // hard horizons (which prevent far-away GA from competing for top-50 slots
@@ -70,6 +134,17 @@ export const MAX_POSITION_JITTER_DEADBAND_MILES = 0.12;
 // Smaller τ = stiffer chase = less lag, more reactive (visible "snaps" on
 // turns at very small τ). 6 s is the "ambient buttery glide" sweet spot.
 export const SPRING_TAU_SEC = 10;
+
+// Why: separate, much shorter τ for the heading chase. Position spring is
+// long (~10 s) because real-world position drift between polls is small
+// and gentle — we want a buttery glide. Heading is different: reported
+// values jitter ±5–10° between polls on noisy ADS-B feeds (slow GA, certain
+// transponders), and a 10 s τ would leave the icon visibly lagging real
+// turns by several seconds. 0.3 s settles 95%+ of a step within a second
+// — enough to swallow per-poll jitter without making real turns feel
+// rubber-banded. Heading uses shortest-arc unwrap (see computeSpringHeading)
+// so wrap-around at 0/360° doesn't trigger a long-way spin.
+export const HEADING_SPRING_TAU_SEC = 0.3;
 // Why: on page load (or when a flight first enters the viewport), the
 // spring has nowhere to chase if from = target — icons sit static until the
 // next poll lands. We bootstrap by extrapolating the target forward by

@@ -509,3 +509,50 @@ export function isHelicopterType(
 ): boolean {
   return resolveAircraftType(icao)?.category === "helicopter";
 }
+
+// Why: known multi-word manufacturer prefixes — listed explicitly so
+// the simple "first word" derivation below doesn't truncate them
+// ("De Havilland" → "De", "McDonnell Douglas" → "McDonnell"). Order
+// matters less than membership; we match against the full prefix.
+// Add to this list when a new ICAO entry's `full` starts with a
+// multi-word brand we want to keep intact.
+const MULTI_WORD_MANUFACTURERS = [
+  "De Havilland",
+  "McDonnell Douglas",
+  "General Dynamics",
+  "North American",
+  "Northrop Grumman"
+] as const;
+
+// Why: extract a clean manufacturer name from the curated `full`
+// label, suitable for inline display alongside the short type label
+// ("Boeing 737-800", "Airbus AS350"). The `full` field can carry
+// extra context — model variants ("MAX 8 200ER"), legacy parenthet-
+// icals ("(Eurocopter AS350)"), or marketing names ("Sundowner") —
+// which is great for tooltips but noisy as a quick-read label. This
+// helper strips the parenthetical and pulls just the manufacturer
+// token (or two-word brand when whitelisted), giving a stable
+// "Airbus" / "Boeing" / "Bell" / etc.
+//
+// Returns null when the type is unmapped (no curated entry to derive
+// from). Callers can fall back to whatever raw display they prefer
+// in that case.
+export function getAircraftManufacturer(
+  icao: string | null | undefined
+): string | null {
+  const resolved = resolveAircraftType(icao);
+  if (!resolved) return null;
+  // Strip a trailing parenthetical: "Airbus H125 (Eurocopter AS350)"
+  // → "Airbus H125".
+  const stripped = resolved.full.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  if (stripped.length === 0) return null;
+  for (const brand of MULTI_WORD_MANUFACTURERS) {
+    if (stripped === brand || stripped.startsWith(`${brand} `)) {
+      return brand;
+    }
+  }
+  // Default: first whitespace-delimited token. Covers single-word
+  // brands like Airbus / Boeing / Cessna / Bell / Leonardo / etc.
+  const firstToken = stripped.split(/\s+/)[0];
+  return firstToken && firstToken.length > 0 ? firstToken : null;
+}

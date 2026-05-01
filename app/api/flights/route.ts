@@ -165,6 +165,33 @@ function jsonResponse(
   });
 }
 
+type DiscoveryArea = {
+  center: { latitude: number; longitude: number };
+  radiusMiles: number;
+};
+
+// Why: every successful-discovery branch wants the same shape so the
+// client doesn't have to remember which providers send which fields.
+// FAA owner enrichment is the one path that needs to be applied
+// uniformly post-discovery (the adsb.lol / OpenSky / AeroAPI flight
+// fetchers don't know about it). Pre-fetch of nearest-candidate
+// trace + AeroAPI details is the CLIENT's responsibility now — it
+// fires `/api/flights/selected` for predicted-nearest candidates
+// using the same heuristic + the same caching path the user-
+// selection flow already uses.
+function buildDiscoveryResponseBody(
+  source: string,
+  area: DiscoveryArea,
+  flights: Flight[]
+) {
+  return {
+    source,
+    center: area.center,
+    radiusMiles: area.radiusMiles,
+    flights: enrichFlightsWithFaaOwners(flights)
+  };
+}
+
 // Why: ADSBdb / AeroAPI / adsb.lol all leave registeredOwner null for some
 // active aircraft, especially law-enforcement helicopters. The FAA's web
 // inquiry covers the gap, but it's a per-tail HTTP fetch — we can't block
@@ -211,7 +238,7 @@ export async function GET(request: NextRequest) {
         const flights = await fetchAeroApiDiscoveryFlights(area);
         setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
         return jsonResponse(
-          { source: "aeroapi-discovery", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(flights) },
+          buildDiscoveryResponseBody("aeroapi-discovery", area, flights),
           { cacheControl: FRESH_CACHE_HEADER }
         );
       } catch (error) {
@@ -222,7 +249,7 @@ export async function GET(request: NextRequest) {
     const cachedFlights = getCachedFeed(area);
     return cachedFlights
       ? jsonResponse(
-          { source: "aeroapi-stale", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(cachedFlights) },
+          buildDiscoveryResponseBody("aeroapi-stale", area, cachedFlights),
           { cacheControl: STALE_CACHE_HEADER }
         )
       : jsonResponse(
@@ -248,7 +275,7 @@ export async function GET(request: NextRequest) {
       // Genuine adsb.lol failures throw and fall through via the catch.
       setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
       return jsonResponse(
-        { source: "adsblol", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(flights) },
+        buildDiscoveryResponseBody("adsblol", area, flights),
         { cacheControl: FRESH_CACHE_HEADER }
       );
     } catch (error) {
@@ -262,7 +289,7 @@ export async function GET(request: NextRequest) {
       const flights = await fetchOpenSkyFlights(area, { warmAeroApiFeed: warmFeedMetadata });
       setCachedFeed(getAreaCacheKey(area), { fetchedAt: Date.now(), flights });
       return jsonResponse(
-        { source: "opensky", center: area.center, radiusMiles: area.radiusMiles, flights: enrichFlightsWithFaaOwners(flights) },
+        buildDiscoveryResponseBody("opensky", area, flights),
         { cacheControl: FRESH_CACHE_HEADER }
       );
     } catch (error) {
@@ -274,12 +301,11 @@ export async function GET(request: NextRequest) {
   const cachedFlights = getCachedFeed(area);
   if (cachedFlights) {
     return jsonResponse(
-      {
-        source: tryAdsbLol ? "adsblol-stale" : "opensky-stale",
-        center: area.center,
-        radiusMiles: area.radiusMiles,
-        flights: enrichFlightsWithFaaOwners(cachedFlights)
-      },
+      buildDiscoveryResponseBody(
+        tryAdsbLol ? "adsblol-stale" : "opensky-stale",
+        area,
+        cachedFlights
+      ),
       { cacheControl: STALE_CACHE_HEADER }
     );
   }

@@ -1,5 +1,6 @@
 import {
   BOOTSTRAP_MAX_EXTRAPOLATION_SEC,
+  HEADING_SPRING_TAU_SEC,
   PROVIDER_DELTA_EMA_DECAY,
   SPRING_TAU_SEC
 } from "@/lib/config/flight-map-constants";
@@ -27,6 +28,40 @@ export function computeSpringPosition(state: FlightAnimationState, frameTime: nu
     latitude: state.targetLatitude + (state.fromLatitude - state.targetLatitude) * factor,
     longitude: state.targetLongitude + (state.fromLongitude - state.targetLongitude) * factor
   };
+}
+
+// Why: shortest-arc signed delta from `from` to `to`, in (-180, 180]. A
+// naive (to - from) doesn't handle wrap-around: 350° → 5° should be a
+// +15° step, not -345°. We normalize the difference into the half-open
+// (-180, 180] range so the spring chase always rotates the short way
+// around the circle.
+function shortestArcDelta(from: number, to: number) {
+  return (((to - from) % 360) + 540) % 360 - 180;
+}
+
+// Why: heading-chase counterpart to computeSpringPosition. Same exponential
+// decay shape but on heading degrees, with a SEPARATE (and much shorter) τ
+// — see HEADING_SPRING_TAU_SEC. Uses shortest-arc unwrap so wrap-around at
+// 0/360° doesn't trigger a long-way spin. Returns null when there's no
+// target to chase; returns target directly when there's no prior heading
+// to chase from (snaps instantly to target on first sight).
+export function computeSpringHeading(
+  state: FlightAnimationState,
+  frameTime: number
+): number | null {
+  if (state.targetHeadingDegrees == null) return null;
+  if (state.fromHeadingDegrees == null) return state.targetHeadingDegrees;
+  const elapsedSec = Math.max(0, (frameTime - state.targetSetAt) / 1000);
+  const factor = Math.exp(-elapsedSec / HEADING_SPRING_TAU_SEC);
+  // pos(t) = target + (from - target) × factor, with shortest-arc (from -
+  // target) so we always rotate the short way around. Then normalize the
+  // result back into [0, 360).
+  const deltaToTarget = -shortestArcDelta(
+    state.fromHeadingDegrees,
+    state.targetHeadingDegrees
+  );
+  const raw = state.targetHeadingDegrees + deltaToTarget * factor;
+  return ((raw % 360) + 360) % 360;
 }
 
 // Why: the cap timestamp chases lastProviderTimestampSec from
@@ -181,7 +216,11 @@ export function updateFlightAnimationStates(
         targetLatitude: bootstrapTargetLat,
         targetLongitude: bootstrapTargetLon,
         targetGroundspeedKnots: flight.groundspeedKnots,
-        targetHeadingDegrees: flight.headingDegrees
+        targetHeadingDegrees: flight.headingDegrees,
+        // Why: from = target on first sight. computeSpringHeading sees
+        // (target, target) and returns target directly — icon snaps to
+        // the reported heading instead of spinning from 0° on appearance.
+        fromHeadingDegrees: flight.headingDegrees
       });
       continue;
     }
@@ -230,6 +269,14 @@ export function updateFlightAnimationStates(
       );
       const currentSpringProviderTimestampSecUnchanged =
         computeSpringProviderTimestampSec(existingState, frameTime);
+      // Why: capture the current spring-evaluated heading as the new
+      // chase start, mirroring the position re-anchor above. Keeps the
+      // heading chase smooth across re-anchors so a hovering / parked
+      // aircraft whose reported heading suddenly changes doesn't snap.
+      const currentSpringHeadingUnchanged = computeSpringHeading(
+        existingState,
+        frameTime
+      );
 
       nextStates.set(flight.id, {
         ...existingState,
@@ -240,7 +287,8 @@ export function updateFlightAnimationStates(
         lastProviderTimestampSec: providerTimestampSec ?? existingState.lastProviderTimestampSec,
         targetSetAt: frameTime,
         targetGroundspeedKnots: flight.groundspeedKnots,
-        targetHeadingDegrees: flight.headingDegrees
+        targetHeadingDegrees: flight.headingDegrees,
+        fromHeadingDegrees: currentSpringHeadingUnchanged
       });
       continue;
     }
@@ -255,6 +303,11 @@ export function updateFlightAnimationStates(
       existingState,
       frameTime
     );
+    // Why: capture spring's current heading as the new chase start, same
+    // pattern as position. Without this, every new target would reset
+    // `from` to the prior reported value (potentially several seconds
+    // stale) and produce a tiny snap on every poll.
+    const currentSpringHeading = computeSpringHeading(existingState, frameTime);
 
     nextStates.set(flight.id, {
       averageProviderDeltaSec,
@@ -267,7 +320,8 @@ export function updateFlightAnimationStates(
       targetLatitude: flight.latitude,
       targetLongitude: flight.longitude,
       targetGroundspeedKnots: flight.groundspeedKnots,
-      targetHeadingDegrees: flight.headingDegrees
+      targetHeadingDegrees: flight.headingDegrees,
+      fromHeadingDegrees: currentSpringHeading
     });
   }
 

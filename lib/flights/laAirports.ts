@@ -310,6 +310,17 @@ export const KNOWN_AIRPORTS: Airport[] = [
     latitude: 34.1307806,
     longitude: -118.4905222
   },
+  {
+    // City of Industry's civic / financial center rooftop helipad —
+    // private use, permission-required. Same "municipal civic center"
+    // category as the LADWP / LAFD entries above; AeroAPI returns
+    // 40CA, the override below maps it to the same readable name.
+    icao: "COI-CC",
+    iata: "City of Industry Civic Center",
+    name: "City of Industry Civic Financial Center Heliport",
+    latitude: 34.024569,
+    longitude: -117.9593
+  },
 
   // ── Hospitals (LA-area) ──
   // Why: medical helicopters (REACH, CALSTAR, PHI Air Med, hospital
@@ -473,6 +484,7 @@ export const AIRPORT_CODE_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = 
   "CL31": "Caltrans District 7",
   "2CN6": "LADWP HQ", // downtown HQ rooftop
   "2CN2": "LADWP Granada Hills", // valley operations facility
+  "40CA": "City of Industry Civic Center", // city civic / financial center rooftop
 
   // ── Hospitals (LA-area) ──
   "35CA": "LAC+USC Medical Center",

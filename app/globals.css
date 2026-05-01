@@ -129,6 +129,25 @@
     }
 }
 
+/* Why: idle-cursor auto-hide. Toggled by hooks/use-auto-hide-cursor.ts
+   on <html> after the configured idle timeout. The descendant
+   selector + !important is needed because shadcn components and
+   ad-hoc utility classes (cursor-pointer, cursor-grab on the map,
+   etc.) set their own cursor on hover, which would otherwise
+   override `cursor: none` propagated from the root.
+
+   Targets <html> rather than <body> so the rule covers every
+   paintable region of the viewport regardless of how body's box is
+   sized. We list the descendant selector first so even browsers
+   that handle cascade on `*` differently render the rule
+   identically. */
+html.cursor-idle,
+html.cursor-idle *,
+html.cursor-idle *::before,
+html.cursor-idle *::after {
+  cursor: none !important;
+}
+
 /* Why: split-flap (Solari board) display animation primitives. The mechanic
    uses 4 stacked half-clipped layers per character cell — two static halves
    showing the steady state, two animated halves performing the visible
